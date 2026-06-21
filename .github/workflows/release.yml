@@ -169,3 +169,5 @@ jobs:
           echo "::notice::Skipping Hex publish. Add the secret at"
           echo "::notice::https://github.com/${{ github.repository }}/settings/secrets/actions"
           echo "::notice::and re-run the workflow (Actions tab → Run workflow) to publish."
+
+# (re-register workflow after repo-creation startup_failure)
