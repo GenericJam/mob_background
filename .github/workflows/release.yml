@@ -143,6 +143,24 @@ jobs:
             echo "package=$pkg" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Verify signing key matches committed public key (fail-safe before publish)
+        if: env.HEX_API_KEY != '' && steps.hex_check.outputs.exists == 'false' && env.MOB_PLUGIN_SIGN_KEY != ''
+        run: |
+          # Derive the ed25519 public key from MOB_PLUGIN_SIGN_KEY and compare it to the
+          # committed priv/mob_plugin.pub. A mismatch means the secret is the wrong key
+          # (e.g. a per-repo key instead of the shared first-party key) and would publish
+          # a signature no host can verify — abort here rather than ship a broken release.
+          elixir -e '
+            priv = System.get_env("MOB_PLUGIN_SIGN_KEY") |> String.trim() |> Base.decode64!()
+            {pub, _} = :crypto.generate_key(:eddsa, :ed25519, priv)
+            committed = "priv/mob_plugin.pub" |> File.read!() |> String.trim() |> Base.decode64!()
+            if pub != committed do
+              IO.puts(:stderr, "::error::MOB_PLUGIN_SIGN_KEY does not derive the committed priv/mob_plugin.pub — refusing to publish. Set the secret to the shared mob first-party private key.")
+              System.halt(1)
+            end
+            IO.puts("signing key matches committed public key — OK")
+          '
+
       - name: Sign plugin (regenerate signature from current manifest)
         if: env.HEX_API_KEY != '' && steps.hex_check.outputs.exists == 'false' && env.MOB_PLUGIN_SIGN_KEY != ''
         run: |
