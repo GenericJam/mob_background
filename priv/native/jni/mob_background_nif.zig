@@ -54,17 +54,10 @@ inline fn detachIfAttached(attached: c_int) void {
 }
 
 // ── NIFs ──────────────────────────────────────────────────────────────────
-// The keep_alive/stop contract from lib/mob_background.ex is `:ok`. When the
-// bridge was never registered (a host that has not called
-// `MobPluginBootstrap.registerAll(this)`, or a build where the bridge class
-// was stripped) we honour that contract with a silent no-op — the plugin is
-// documented as idempotent, and returning `:error` here would break every
-// caller. The MOB-59 fix is the `exceptionClear` after the JNI call: any
-// exception thrown from the Kotlin side (SecurityException from a missing
-// FOREGROUND_SERVICE permission, IllegalStateException from a foreground-
-// service start restriction on Android 12+, etc.) must not be left pending
-// on the JNIEnv when we return to the BEAM scheduler, or the next JNI call
-// on this thread crashes with undefined behaviour.
+// Return `:ok` on missing-cache and get_jenv failure so the moduledoc's
+// idempotent contract holds. `exceptionClear` after each `CallStaticVoidMethod`
+// prevents a pending Kotlin exception from leaking to the next JNI call —
+// see MOB-59 and CHANGELOG for the failure modes.
 fn nif_background_keep_alive(env: ?*erts.ErlNifEnv, argc: c_int, argv: [*]const erts.ERL_NIF_TERM) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
