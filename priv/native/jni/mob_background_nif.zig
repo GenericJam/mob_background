@@ -36,8 +36,14 @@ var g_bg_cls: jni.JClass = null;
 export fn Java_io_mob_background_MobBackgroundBridge_nativeRegister(jenv: *jni.JNIEnv, cls: jni.JClass) callconv(.c) void {
     g_bg_cls = jni.newGlobalRef(jenv, cls);
     if (g_bg_cls == null) return;
+    // A missing method leaves a NoSuchMethodError pending on the JNIEnv —
+    // clearing here matches mob core's cache pattern (see mob_ui_cache_class
+    // in mob/android/jni/mob_nif.zig) so the exception does not leak into
+    // any later BEAM-thread JNI call.
     g_bg.keep_alive = jni.getStaticMethodID(jenv, cls, "background_keep_alive", "()V");
+    if (g_bg.keep_alive == null) jni.exceptionClear(jenv);
     g_bg.stop = jni.getStaticMethodID(jenv, cls, "background_stop", "()V");
+    if (g_bg.stop == null) jni.exceptionClear(jenv);
 }
 
 // ── Thread-attach helper (mirror mob-core / touch) ────────────────────────
@@ -48,12 +54,25 @@ inline fn detachIfAttached(attached: c_int) void {
 }
 
 // ── NIFs ──────────────────────────────────────────────────────────────────
+// The keep_alive/stop contract from lib/mob_background.ex is `:ok`. When the
+// bridge was never registered (a host that has not called
+// `MobPluginBootstrap.registerAll(this)`, or a build where the bridge class
+// was stripped) we honour that contract with a silent no-op — the plugin is
+// documented as idempotent, and returning `:error` here would break every
+// caller. The MOB-59 fix is the `exceptionClear` after the JNI call: any
+// exception thrown from the Kotlin side (SecurityException from a missing
+// FOREGROUND_SERVICE permission, IllegalStateException from a foreground-
+// service start restriction on Android 12+, etc.) must not be left pending
+// on the JNIEnv when we return to the BEAM scheduler, or the next JNI call
+// on this thread crashes with undefined behaviour.
 fn nif_background_keep_alive(env: ?*erts.ErlNifEnv, argc: c_int, argv: [*]const erts.ERL_NIF_TERM) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
+    if (g_bg_cls == null or g_bg.keep_alive == null) return erts.ok(env);
     var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jenv = get_jenv(&attached) orelse return erts.ok(env);
     jenv.*.CallStaticVoidMethod.?(jenv, g_bg_cls, g_bg.keep_alive);
+    jni.exceptionClear(jenv);
     detachIfAttached(attached);
     return erts.ok(env);
 }
@@ -61,9 +80,11 @@ fn nif_background_keep_alive(env: ?*erts.ErlNifEnv, argc: c_int, argv: [*]const 
 fn nif_background_stop(env: ?*erts.ErlNifEnv, argc: c_int, argv: [*]const erts.ERL_NIF_TERM) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
+    if (g_bg_cls == null or g_bg.stop == null) return erts.ok(env);
     var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jenv = get_jenv(&attached) orelse return erts.ok(env);
     jenv.*.CallStaticVoidMethod.?(jenv, g_bg_cls, g_bg.stop);
+    jni.exceptionClear(jenv);
     detachIfAttached(attached);
     return erts.ok(env);
 }
