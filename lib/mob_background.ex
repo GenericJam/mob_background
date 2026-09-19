@@ -6,6 +6,32 @@ defmodule MobBackground do
   On iOS this is a silent `AVAudioEngine` session; on Android it is a
   foreground service. Opt-in: add the dependency and activate it in `mob.exs`.
 
+  ## Which plugin do I actually want?
+
+  The background/wake/notify/push quartet gets mixed up regularly.
+  Four distinct concerns:
+
+  | I want to…                                             | Plugin                                                            |
+  |--------------------------------------------------------|-------------------------------------------------------------------|
+  | Keep my app alive continuously while backgrounded      | **`mob_background`** (this plugin)                                |
+  | Run a handler only when the OS fires a scheduler / silent push | [`mob_wake`](https://hexdocs.pm/mob_wake) (device-side)   |
+  | Schedule local notifications / register for push       | [`mob_notify`](https://hexdocs.pm/mob_notify) (device-side)       |
+  | **Send** a push from my server                         | [`mob_push`](https://hexdocs.pm/mob_push) (server-side; no device code) |
+
+  * **`mob_background` vs `mob_wake`:** background is a *keep-alive* —
+    the app stays running while backgrounded so *your own* code (an
+    active upload, a walking tracker, a music player) can keep going.
+    Wake is *event-driven* — the OS (or a silent push) fires a specific
+    handler, it runs to completion, the platform reports done. They
+    stack: an app can use both. Cost/benefit: `mob_background` needs
+    an ongoing platform justification (audio on iOS, persistent
+    notification on Android); `mob_wake` doesn't — but doesn't run
+    continuously either.
+  * **When in doubt:** if you're doing episodic work triggered by an
+    external event, `mob_wake`. If you're doing continuous work the
+    user has explicitly kicked off, `mob_background`. If you're
+    supporting both patterns in the same app, activate both.
+
   ## Installation
 
       # mix.exs
