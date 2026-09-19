@@ -1,5 +1,9 @@
 # mob_background — Agent Instructions
 
+Start with [`AGENTS.md`](AGENTS.md) — mob_background-specific orientation
+(what it is, what it is NOT, cross-repo work, pre-empt-failure rules).
+This file goes deeper on the internal layout.
+
 A Mob capability plugin: keep the BEAM node alive when the screen locks or the
 app is backgrounded. iOS uses a silent `AVAudioEngine` session; Android uses a
 `dataSync` foreground service. Extracted from mob core into an opt-in plugin.
