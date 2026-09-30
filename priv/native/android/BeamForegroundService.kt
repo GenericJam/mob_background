@@ -45,8 +45,8 @@ class BeamForegroundService : Service() {
         }
         ensureChannel()
         // Must match android:foregroundServiceType="dataSync" on the manifest
-        // <service>; an untyped start is rejected/logged on API 34+.
-        // ServiceCompat drops the type below API 29, where it doesn't exist.
+        // <service>. Passed explicitly rather than relying on the manifest
+        // lookup; ServiceCompat drops the type below API 29, where it doesn't exist.
         ServiceCompat.startForeground(
             this, NOTIF_ID, buildNotification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
