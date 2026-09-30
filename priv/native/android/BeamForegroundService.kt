@@ -5,9 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 
 /**
  * Foreground service that keeps the BEAM node alive when the screen is locked.
@@ -30,19 +33,49 @@ class BeamForegroundService : Service() {
     companion object {
         private const val NOTIF_ID      = 9820
         private const val CHANNEL_ID    = "mob_beam_fg"
+        private const val TAG           = "MobBackground"
         const val ACTION_START = "mob.beam.START"
         const val ACTION_STOP  = "mob.beam.STOP"
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopForeground(true)
-            stopSelf()
+            stopKeepAlive()
             return START_NOT_STICKY
         }
         ensureChannel()
-        startForeground(NOTIF_ID, buildNotification())
+        // Must match android:foregroundServiceType="dataSync" on the manifest
+        // <service>; an untyped start is rejected/logged on API 34+.
+        // ServiceCompat drops the type below API 29, where it doesn't exist.
+        ServiceCompat.startForeground(
+            this, NOTIF_ID, buildNotification(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        )
         return START_STICKY
+    }
+
+    // Android 15+ (targetSdk 35) caps dataSync foreground services at 6h per
+    // 24h in the background. When the cap is hit the system calls onTimeout
+    // and the service must stop within a few seconds, or the app crashes with
+    // ForegroundServiceDidNotStopInTimeException. The BEAM is not notified;
+    // keep_alive/0 must be called again (from the foreground) to restart.
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "dataSync foreground service time limit reached (startId=$startId, fgsType=$fgsType); stopping keep-alive")
+        stopKeepAlive()
+    }
+
+    // Single-argument overload (API 34+). The system calls it for
+    // shortService timeouts; dataSync gets the two-argument overload above on
+    // API 35+. Handled the same way so no timeout path can leave us running.
+    @Deprecated("Superseded by onTimeout(Int, Int) on API 35")
+    override fun onTimeout(startId: Int) {
+        Log.w(TAG, "foreground service time limit reached (startId=$startId); stopping keep-alive")
+        stopKeepAlive()
+    }
+
+    private fun stopKeepAlive() {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

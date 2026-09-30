@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Android: no crash when the Android 15 `dataSync` time limit expires**
+  (MOB-307). With targetSdk 35, dataSync foreground services get at most 6h
+  per 24h in the background; `BeamForegroundService` had no `onTimeout`, so
+  the system crashed the app with `ForegroundServiceDidNotStopInTimeException`.
+  It now implements `onTimeout` (API 34 and 35 overloads), logs a warning under
+  the `MobBackground` tag, and stops the service. The BEAM is not notified;
+  call `keep_alive/0` again from the foreground. Hosts that copied
+  `BeamForegroundService.kt` must re-copy it.
+
+### Changed
+
+- **Android: foreground service type is now passed explicitly** (MOB-299).
+  `BeamForegroundService` uses `ServiceCompat.startForeground` with
+  `FOREGROUND_SERVICE_TYPE_DATA_SYNC` (and `ServiceCompat.stopForeground`)
+  instead of the two-argument `startForeground`. No behaviour change: the
+  old call already resolved to the manifest's `dataSync` type (dumpsys shows
+  `types=0x00000001` either way). The logcat line
+  `ForegroundServiceTypeLoggerModule: ... does not have any types` that
+  prompted this is AOSP stats-logger noise printed for every `dataSync`
+  service and still appears; it is harmless.
+
 ## [0.1.1] - 2026-09-30
 
 ### Fixed

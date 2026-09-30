@@ -71,6 +71,11 @@ These can't be auto-injected, so they print as a warning on every
 - **Android notification:** Android requires every foreground service to post a
   visible notification ("Running in background", `IMPORTANCE_LOW`, no sound).
   There is no API to hide it.
+- **Android 15 time limit:** with `targetSdk` 35+, Android allows a `dataSync`
+  foreground service at most 6 hours per 24 hours while the app is in the
+  background. When the limit is hit the service stops itself (logged under the
+  `MobBackground` tag) and the notification disappears; the BEAM is not told.
+  Call `keep_alive/0` again once the app returns to the foreground.
 
 ## License
 
