@@ -120,12 +120,15 @@ defmodule MobBackground do
 
   ### Visible notification (required by Android)
 
-  Android requires every foreground service to post a visible notification.
-  The notification appears in the status bar and notification tray with the
-  app name and the text "Running in background". It has `IMPORTANCE_LOW` so
-  it produces no sound or vibration. There is no API to hide it — this is
-  an OS-level constraint designed to inform users when apps are running in
-  the background.
+  Android requires every foreground service to have a notification. It uses
+  the app name and the text "Running in background", with `IMPORTANCE_LOW`
+  so it makes no sound or vibration. There is no API to hide it.
+
+  On Android 13+ (API 33) the notification is only *shown* in the status bar
+  and drawer when the app holds `POST_NOTIFICATIONS` — declared and granted
+  at runtime (activate `mob_notify` and request `:notifications`). Without
+  it the foreground service still runs (verified on Android 15) but users
+  only see it in the system's running-apps list.
 
   ### Requirements
 

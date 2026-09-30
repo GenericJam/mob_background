@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.1] - 2026-09-30
 
 ### Fixed
 
@@ -17,8 +17,33 @@
   guard on a missing bridge cache — a host that never called
   `MobPluginBootstrap.registerAll(this)` gets a silent no-op instead of
   passing a null `jclass` to `CallStaticVoidMethod`, which itself was UB.
-  The `:ok` return contract from `MobBackground.keep_alive/0` and
-  `stop/0` is unchanged. iOS path is untouched.
+  `keep_alive/0` and `stop/0` now always return `:ok`, matching their
+  `@spec`. Previously a `get_jenv` failure returned `:error`. Note that a
+  Kotlin-side failure is swallowed: the keep-alive simply doesn't start,
+  and nothing is returned or logged. iOS path is untouched.
+
+- **Package now ships `priv/mob_plugin.pub`** (MOB-65). 0.1.0 was
+  published signed but without its public key, so
+  `mix mob.plugin.trust mob_background` failed with "ships no
+  priv/mob_plugin.pub" and the host signature gate could not verify the
+  plugin. The shared Mob first-party key (same fingerprint as
+  `mob_camera` / `mob_ash` / `mob_audio_capture`) is now included.
+
+### Changed
+- **Re-signed with plugin envelope v2** (MOB-287). mob_dev 0.7.2+ verifies
+  this signature before evaluating the manifest. mob_dev 0.7.0 / 0.7.1 can't
+  read v2 signatures and report this release as `invalid signature` —
+  upgrade the host app to `{:mob_dev, "~> 0.7.2", only: :dev, runtime: false}`.
+- **Docs: "Which plugin do I actually want?" section** in the
+  `MobBackground` moduledoc. It explains how `mob_background` (continuous
+  keep-alive) differs from `mob_wake` (OS-triggered handler), `mob_notify`
+  (local notifications and push registration) and `mob_push` (server-side
+  send).
+- **Docs: the keep-alive notification needs `POST_NOTIFICATIONS` to be
+  visible on Android 13+.** The `keep_alive/0` docs said the notification
+  always appears in the status bar; on API 33+ it's only shown when the app
+  holds `POST_NOTIFICATIONS`. The foreground service itself runs either way
+  (device-verified on a Moto G Power 5G 2024, Android 15).
 
 ## 0.1.0
 
