@@ -113,8 +113,8 @@ defmodule MobBackground do
   ## Android — foreground service
 
   On Android the OS equivalent of iOS background execution is a *foreground
-  service*. `keep_alive/0` starts `BeamForegroundService`, which calls
-  `startForeground/2` with a low-priority persistent notification. The OS
+  service*. `keep_alive/0` starts `BeamForegroundService`, which starts in
+  the foreground with type `dataSync` and a low-priority persistent notification. The OS
   will not kill a foreground service under memory pressure and will not
   pause the process when the screen locks.
 
@@ -152,6 +152,15 @@ defmodule MobBackground do
   eventually kill the process — `keep_alive/0` prevents aggressive
   *background process killing* but not an eventual idle OOM kill after many
   hours of complete inactivity.
+
+  ### Android 15 time limit
+
+  With `targetSdk` 35+, Android allows a `dataSync` foreground service at most
+  6 hours per 24 hours while the app is in the background. When the limit is
+  reached the system calls the service's `onTimeout`, which logs a warning
+  (tag `MobBackground`) and stops the service, so the app does not crash. The
+  BEAM is not notified. Call `keep_alive/0` again once the app is back in
+  the foreground.
   """
 
   @doc """
