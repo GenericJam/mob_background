@@ -1,6 +1,6 @@
-# AGENTS.md — orientation for AI agents working on mob_background
+# mob_background — Agent Instructions
 
-You're in **mob_background**, a Mob capability plugin: keep the BEAM node alive when the screen locks or the app is backgrounded. iOS uses a silent `AVAudioEngine` session; Android uses a `dataSync` foreground service. Public API is `MobBackground.keep_alive/0` + `stop/0`.
+You're in **mob_background**, a Mob capability plugin: keep the BEAM node alive when the screen locks or the app is backgrounded. iOS uses a silent `AVAudioEngine` session; Android uses a `dataSync` foreground service. Public API is `MobBackground.keep_alive/0` + `stop/0`. Extracted from mob core into an opt-in plugin.
 
 **Also read [`~/code/mob/AGENTS.md`](../mob/AGENTS.md)** for the system view and the cross-cutting pre-empt-failure rules. This file is mob_background-specific.
 
@@ -74,4 +74,12 @@ xcrun clang-format -i priv/native/ios/*.m
 mix mob.validate_plugin   # from a host app
 ```
 
-`mix.exs` version bump on master triggers `.github/workflows/release.yml` (tag + GitHub Release + Hex publish). Sign the manifest against the shared mob key at `~/.mob/keys/` first. Do NOT bump versions without explicit permission. See `~/code/mob/RELEASE.md`.
+Native code isn't exercised by `mix test`; verify on a device (see Testing).
+
+Release: `mix.exs` version is the source of truth, and a bump on master triggers `.github/workflows/release.yml` (tag + GitHub Release + Hex publish). Do NOT bump versions without explicit permission. See [`~/code/mob/RELEASE.md`](../mob/RELEASE.md). Steps:
+
+1. Bump the version and update `CHANGELOG.md`.
+2. Sign the manifest with the shared mob key at `~/.mob/keys/`: `cp ~/.mob/keys/<sibling>.priv ~/.mob/keys/mob_background.priv && mix mob.plugin.sign`.
+3. Publish: the GitHub release workflow on push, or `HEX_API_KEY=… mix hex.publish` with `~/.hex/hex.config` moved aside.
+
+A published version is permanent — get a native build green on hardware first.
