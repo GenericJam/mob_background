@@ -23,10 +23,10 @@ import androidx.core.app.ServiceCompat
  * service — this is the price of keeping the process alive while the screen is off.
  * The notification appears in the status bar but makes no sound.
  *
- * A foreground <service> must be a host-package class declared in the host's
- * AndroidManifest.xml; this file ships in the plugin's priv/ so you can copy it
- * into your app's host package. See the MobBackground moduledoc for the manifest
- * <service> snippet.
+ * Ships in the plugin's android.bridge_kt list, so the native build copies it
+ * into the host's io/mob/background/ next to MobBackgroundBridge.kt, and the
+ * manifest's android.manifest_application_snippets declares its <service>
+ * (foregroundServiceType="dataSync") in the host AndroidManifest.xml.
  */
 class BeamForegroundService : Service() {
 
@@ -36,6 +36,12 @@ class BeamForegroundService : Service() {
         private const val TAG           = "MobBackground"
         const val ACTION_START = "mob.beam.START"
         const val ACTION_STOP  = "mob.beam.STOP"
+
+        // True between a successful startForeground and stop/destroy. Read by
+        // MobBackgroundBridge.background_status() (MobBackground.status/0).
+        @Volatile
+        var running = false
+            private set
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -51,6 +57,7 @@ class BeamForegroundService : Service() {
             this, NOTIF_ID, buildNotification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         )
+        running = true
         return START_STICKY
     }
 
@@ -74,8 +81,14 @@ class BeamForegroundService : Service() {
     }
 
     private fun stopKeepAlive() {
+        running = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    override fun onDestroy() {
+        running = false
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

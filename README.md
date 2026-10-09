@@ -21,7 +21,13 @@ MobBackground.keep_alive()
 MobBackground.stop()
 ```
 
-`keep_alive/0` is idempotent — safe to call multiple times.
+`keep_alive/0` is idempotent — safe to call multiple times. `status/0` reports,
+without changing anything, whether keep-alive can work in this host and whether
+it's on.
+
+Run `mix mob.selftest` from a host app to check on a device that the native
+side is linked and wired up (`MobBackground.SelfTest`, a read-only
+`background_status/0` call that never starts the keep-alive).
 
 ## Install
 
@@ -39,22 +45,15 @@ config :mob, :trusted_plugins, %{mob_background: "ed25519:<fingerprint>"}
 
 ## Host requirements (the native build warns about these)
 
-These can't be auto-injected, so they print as a warning on every
+On Android the build adds everything when the plugin is activated: the
+`FOREGROUND_SERVICE` permissions, the `BeamForegroundService` class (copied
+into `io/mob/background/` next to the bridge) and its `<service
+android:foregroundServiceType="dataSync">` declaration. If you copied
+`BeamForegroundService.kt` into your app for plugin 0.1.x somewhere other
+than `io/mob/background/`, delete that copy.
+
+This one can't be added by the build, so it prints as a warning on every
 `mix mob.deploy --native` of the host:
-
-- **Android `<service>`.** A foreground service must be a host-package class.
-  Add to `AndroidManifest.xml` inside `<application>`:
-
-  ```xml
-  <service android:name="io.mob.background.BeamForegroundService"
-      android:exported="false"
-      android:foregroundServiceType="dataSync" />
-  ```
-
-  The service source ships in this package under
-  `priv/native/android/BeamForegroundService.kt` — copy it into your host
-  package (the build copies only the bridge automatically). The
-  `FOREGROUND_SERVICE` permissions are added automatically on activation.
 
 - **iOS `UIBackgroundModes`.** `Info.plist` must declare the `audio` mode (the
   keep-alive uses a silent audio session). `mix mob.new` adds this; for Xcode

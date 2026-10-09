@@ -5,6 +5,9 @@
 //! `BeamForegroundService` (a foreground service that keeps the BEAM node
 //! alive when the screen locks). `background_keep_alive` / `background_stop`
 //! return :ok and invoke the matching static method on the bridge.
+//! `background_status` is read-only: it returns `:idle` / `:running`, or
+//! `{:error, reason}` when the bridge never registered or keep-alive can't
+//! work in this host (see `statusTerm`).
 //!
 //! Build path: compiled via `addZigObject` from `-Dplugin_zig_nifs`, reaching
 //! mob-core ERTS / JNI bindings through `@import("erts")` / `@import("jni")`.
@@ -13,8 +16,8 @@
 //! Registration: the JVM calls
 //! `Java_io_mob_background_MobBackgroundBridge_nativeRegister(jenv, cls)` at
 //! startup (MobPluginBootstrap.registerAll -> register()); that thunk caches
-//! the bridge jclass + the 2 method IDs. Both bridge methods are arity-0
-//! `()V`, so there are no varargs to marshal.
+//! the bridge jclass + the 3 method IDs. All bridge methods are arity-0
+//! (`()V`, and `()I` for status), so there are no varargs to marshal.
 const std = @import("std");
 const erts = @import("erts");
 const jni = @import("jni");
@@ -27,6 +30,7 @@ extern var g_jvm: ?*jni.JavaVM;
 const BgMethods = struct {
     keep_alive: jni.JMethodID = null,
     stop: jni.JMethodID = null,
+    status: jni.JMethodID = null,
 };
 
 var g_bg: BgMethods = .{};
@@ -44,6 +48,8 @@ export fn Java_io_mob_background_MobBackgroundBridge_nativeRegister(jenv: *jni.J
     if (g_bg.keep_alive == null) jni.exceptionClear(jenv);
     g_bg.stop = jni.getStaticMethodID(jenv, cls, "background_stop", "()V");
     if (g_bg.stop == null) jni.exceptionClear(jenv);
+    g_bg.status = jni.getStaticMethodID(jenv, cls, "background_status", "()I");
+    if (g_bg.status == null) jni.exceptionClear(jenv);
 }
 
 // ── Thread-attach helper (mirror mob-core / touch) ────────────────────────
@@ -82,6 +88,34 @@ fn nif_background_stop(env: ?*erts.ErlNifEnv, argc: c_int, argv: [*]const erts.E
     return erts.ok(env);
 }
 
+// Maps MobBackgroundBridge.background_status() codes (STATUS_* there) to terms.
+fn statusTerm(env: ?*erts.ErlNifEnv, code: jni.JInt) erts.ERL_NIF_TERM {
+    return switch (code) {
+        0 => erts.atom(env, "idle"),
+        1 => erts.atom(env, "running"),
+        2 => erts.errorTuple(env, erts.atom(env, "no_activity")),
+        3 => erts.errorTuple(env, erts.atom(env, "service_not_declared")),
+        4 => erts.errorTuple(env, erts.atom(env, "service_not_data_sync")),
+        5 => erts.errorTuple(env, erts.atom(env, "status_failed")),
+        else => erts.errorTuple(env, erts.makeTuple(env, .{ erts.atom(env, "unknown_status"), erts.enif_make_int64(env, code) })),
+    };
+}
+
+// Read-only status. Unlike keep_alive/stop this reports a missing bridge
+// instead of answering :ok, so MobBackground.SelfTest can tell a registered
+// bridge from an unregistered one.
+fn nif_background_status(env: ?*erts.ErlNifEnv, argc: c_int, argv: [*]const erts.ERL_NIF_TERM) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (g_bg_cls == null or g_bg.status == null) return erts.errorTuple(env, erts.atom(env, "bridge_not_registered"));
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.errorTuple(env, erts.atom(env, "no_jni_env"));
+    const code = jenv.*.CallStaticIntMethod.?(jenv, g_bg_cls, g_bg.status);
+    jni.exceptionClear(jenv);
+    detachIfAttached(attached);
+    return statusTerm(env, code);
+}
+
 // ── NIF table + init entry point ─────────────────────────────────────────
 fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) callconv(.c) c_int {
     _ = env;
@@ -93,6 +127,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
 const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "background_keep_alive", .arity = 0, .fptr = nif_background_keep_alive, .flags = 0 },
     .{ .name = "background_stop", .arity = 0, .fptr = nif_background_stop, .flags = 0 },
+    .{ .name = "background_status", .arity = 0, .fptr = nif_background_status, .flags = 0 },
 };
 
 var nif_entry: erts.ErlNifEntry = .{
