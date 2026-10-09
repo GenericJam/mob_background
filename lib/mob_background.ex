@@ -46,8 +46,10 @@ defmodule MobBackground do
 
   This plugin has one `host_requirement` the native build warns about on
   every `mix mob.deploy --native` of the host: the iOS `UIBackgroundModes`
-  plist key (see *iOS → Requirements* below). The Android service class and
-  its `<service>` declaration are added by the build.
+  plist key (see *iOS → Requirements* below). The plugin deliberately
+  doesn't add it to `Info.plist`: Apple rejects the mode in apps with no
+  audio feature, so declaring it is the app author's call. The Android
+  service class and its `<service>` declaration are added by the build.
 
   ## Usage
 

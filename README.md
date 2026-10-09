@@ -52,8 +52,9 @@ android:foregroundServiceType="dataSync">` declaration. If you copied
 `BeamForegroundService.kt` into your app for plugin 0.1.x somewhere other
 than `io/mob/background/`, delete that copy.
 
-This one can't be added by the build, so it prints as a warning on every
-`mix mob.deploy --native` of the host:
+The plugin deliberately doesn't add this one to your `Info.plist` (Apple
+rejects the mode in apps with no audio feature, so it's the app author's
+call); it prints as a warning on every `mix mob.deploy --native` of the host:
 
 - **iOS `UIBackgroundModes`.** `Info.plist` must declare the `audio` mode (the
   keep-alive uses a silent audio session). `mix mob.new` adds this; for Xcode

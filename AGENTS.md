@@ -30,7 +30,7 @@ Continuous-execution keep-alive. `keep_alive/0` on iOS starts a silent `AVAudioE
 ## The two load-bearing invariants
 
 1. **`keep_alive/0` is idempotent.** iOS guards on `g_keep_alive_active`; Android's service `onStartCommand` is safe to call repeatedly. Both restart the keep-alive after an interruption (iOS audio-session interruption → automatic engine restart; Android START_STICKY).
-2. **The host requirements are real silent-failure landmines.** Without the Android `<service>` declaration `keep_alive/0` starts nothing; without iOS `UIBackgroundModes: [audio]` the silent session can't hold the app alive (and Apple rejects the mode for apps with no audio feature). The build contributes the `<service>` (manifest snippet); the plist key stays a `host_requirement` so every `mix mob.deploy --native` warns the host author. `status/0` (and the self-test) report both. Keep them accurate.
+2. **The host requirements are real silent-failure landmines.** Without the Android `<service>` declaration `keep_alive/0` starts nothing; without iOS `UIBackgroundModes: [audio]` the silent session can't hold the app alive (and Apple rejects the mode for apps with no audio feature). The build contributes the `<service>` (manifest snippet). The plist key stays a `host_requirement` on purpose, not via `ios.plist_keys` (which mob_dev >= 0.6.16 could merge): Apple rejects the mode in apps with no audio feature, so the app author must opt in. Every `mix mob.deploy --native` warns about it. `status/0` (and the self-test) report both. Keep them accurate.
 
 ## Cross-repo work
 
