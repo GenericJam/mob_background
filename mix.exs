@@ -6,7 +6,7 @@ defmodule MobBackground.MixProject do
   def project do
     [
       app: :mob_background,
-      version: "0.1.2",
+      version: "0.2.0",
       elixir: "~> 1.17",
       deps: deps(),
       aliases: aliases(),

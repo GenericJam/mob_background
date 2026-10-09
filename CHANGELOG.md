@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - 2026-10-09
 
 ### Fixed
 
@@ -14,10 +14,10 @@
   `<service android:name="io.mob.background.BeamForegroundService"
   android:exported="false" android:foregroundServiceType="dataSync" />`
   through `android.manifest_application_snippets` (skipped when the host
-  already declares it). The two Android `host_requirements` are gone. Hosts
-  that copied `BeamForegroundService.kt` somewhere other than
-  `io/mob/background/` must delete their copy; one at that path is
-  overwritten.
+  already declares it). The two Android `host_requirements` are gone.
+  **Hosts that copied `BeamForegroundService.kt` by hand must delete their
+  copy** (one at `io/mob/background/` is overwritten; one elsewhere would
+  clash), and can drop their hand-added `<service>` entry.
 
 ### Added
 
@@ -29,9 +29,16 @@
   and the Android NIF answers `{:error, :bridge_not_registered}`,
   `:no_activity`, `:service_not_declared` or `:service_not_data_sync`; all
   fail, as does a NIF that isn't linked. Run it with `mix mob.selftest` from
-  a host app (mob_dev 0.7.17). Requires mob 0.9.15; `mob_version` in the
-  manifest is now `~> 0.9`.
-- **`MobBackground.status/0`**, the public face of `background_status/0`.
+  a host app (mob_dev 0.7.17).
+- **`MobBackground.status/0`**, the public face of `background_status/0`:
+  reports `:idle`, `:running` or `{:error, reason}` without starting the
+  keep-alive.
+
+### Changed
+
+- **Requires mob >= 0.9.15** (was `~> 0.7`), for `Mob.Plugin.SelfTest`;
+  `mob_version` in the manifest is now `~> 0.9` (was `~> 0.6`). Hosts on
+  mob 0.7 or 0.8 must upgrade mob before taking this release.
 
 ## [0.1.2] - 2026-09-30
 
