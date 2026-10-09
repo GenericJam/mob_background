@@ -18,18 +18,19 @@ Continuous-execution keep-alive. `keep_alive/0` on iOS starts a silent `AVAudioE
 
 ## Anatomy of the plugin
 
-* `lib/mob_background.ex` — public `keep_alive/0` + `stop/0`.
+* `lib/mob_background.ex` — public `keep_alive/0` + `stop/0`, and the read-only `status/0`.
+* `lib/mob_background/self_test.ex` — `MobBackground.SelfTest` (`Mob.Plugin.SelfTest`, run by `mix mob.selftest`): classifies the `background_status/0` answer. Never starts the keep-alive.
 * `src/mob_background_nif.erl` — Erlang NIF stub (tolerant `on_load`).
-* `priv/mob_plugin.exs` — manifest. Bridge implements `MobActivityAware` (needs Activity Context). FOREGROUND_SERVICE permissions auto-merged; host `<service>` + iOS plist key declared as `host_requirements`.
-* `priv/native/jni/mob_background_nif.zig` — Android NIF glue. Arity-0 static `CallStaticVoidMethod` to the bridge; no inbound delivery thunk, no pid.
-* `priv/native/android/MobBackgroundBridge.kt` — starts/stops the foreground service. MobActivityAware (Activity Context).
-* `priv/native/android/BeamForegroundService.kt` — the foreground `Service`. Ships in `priv/` because a foreground `<service>` must be a host-package class the build can't auto-inject; the host copies it into its own package.
-* `priv/native/ios/mob_background_nif.m` — the silent `AVAudioEngine` session. Guards on `g_keep_alive_active` for idempotence.
+* `priv/mob_plugin.exs` — manifest. Bridge implements `MobActivityAware` (needs Activity Context). `android.bridge_kt` is a list (bridge + `BeamForegroundService.kt`, both copied into the host's `io/mob/background/`); the `<service>` comes from `android.manifest_application_snippets`; FOREGROUND_SERVICE permissions auto-merged; only the iOS plist key is a `host_requirement`.
+* `priv/native/jni/mob_background_nif.zig` — Android NIF glue. Arity-0 static calls to the bridge (`()V` keep_alive/stop, `()I` status); no inbound delivery thunk, no pid. `background_status` answers `{:error, :bridge_not_registered}` until `nativeRegister` ran.
+* `priv/native/android/MobBackgroundBridge.kt` — starts/stops the foreground service; `background_status()` checks Activity + the declared `<service>` (via `PackageManager`). MobActivityAware (Activity Context).
+* `priv/native/android/BeamForegroundService.kt` — the foreground `Service`, shipped to the host by the build (MOB-423: before, the host had to copy it and an unmodified host failed to compile). Every class the bridge references must be in a `bridge_kt` file; `test/mob_background_test.exs` enforces it.
+* `priv/native/ios/mob_background_nif.m` — the silent `AVAudioEngine` session. Guards on `g_keep_alive_active` (atomic, read by `background_status`) for idempotence.
 
 ## The two load-bearing invariants
 
 1. **`keep_alive/0` is idempotent.** iOS guards on `g_keep_alive_active`; Android's service `onStartCommand` is safe to call repeatedly. Both restart the keep-alive after an interruption (iOS audio-session interruption → automatic engine restart; Android START_STICKY).
-2. **The host requirements are real silent-failure landmines.** Without the Android `<service>` declaration `keep_alive/0` starts nothing; without iOS `UIBackgroundModes: [audio]` the silent session can't hold the app alive (and Apple rejects the mode for apps with no audio feature). The manifest declares both as `host_requirements` so every `mix mob.deploy --native` warns the host author. Keep that list accurate.
+2. **The host requirements are real silent-failure landmines.** Without the Android `<service>` declaration `keep_alive/0` starts nothing; without iOS `UIBackgroundModes: [audio]` the silent session can't hold the app alive (and Apple rejects the mode for apps with no audio feature). The build contributes the `<service>` (manifest snippet). The plist key stays a `host_requirement` on purpose, not via `ios.plist_keys` (which mob_dev >= 0.6.16 could merge): Apple rejects the mode in apps with no audio feature, so the app author must opt in. Every `mix mob.deploy --native` warns about it. `status/0` (and the self-test) report both. Keep them accurate.
 
 ## Cross-repo work
 
@@ -45,7 +46,7 @@ Elixir suite:
 mix test
 ```
 
-Covers manifest structure and the API's idempotence rules on host (13 tests). Native code isn't exercised — deploy against a real device:
+Covers manifest structure, the Kotlin the build copies into the host (every referenced class shipped, every `Service` declared as `dataSync`), the NIF stub, and `MobBackground.SelfTest`'s classification on host. Native code isn't exercised — `mix mob.selftest` from a host app runs the self-test on a device; for keep-alive itself deploy against a real device:
 
 ```bash
 mix mob.deploy --native --device <serial>

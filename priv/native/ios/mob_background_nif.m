@@ -22,7 +22,9 @@
 
 static AVAudioEngine *g_keep_alive_engine = nil;
 static AVAudioPlayerNode *g_keep_alive_player = nil;
-static BOOL g_keep_alive_active = NO; // user intent: should be running
+// User intent: should be running. Written on the main queue, read by
+// background_status on a BEAM scheduler thread, hence _Atomic.
+static _Atomic(BOOL) g_keep_alive_active = NO;
 static id g_keep_alive_interruption_observer =
     nil; // token from addObserverForName, needed for removeObserver
 
@@ -150,9 +152,29 @@ static ERL_NIF_TERM nif_background_stop(ErlNifEnv *env, int argc, const ERL_NIF_
   return enif_make_atom(env, "ok");
 }
 
+// Read-only status: {error, no_audio_background_mode} when Info.plist lacks
+// UIBackgroundModes [audio] (the silent session can't hold the app alive),
+// else running / idle from the keep-alive intent. keep_alive/stop apply on
+// the main queue, so a status read right after either may not reflect it yet.
+static ERL_NIF_TERM nif_background_status(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+  (void)argc;
+  (void)argv;
+  BOOL has_audio_mode = NO;
+  @autoreleasepool {
+    id modes = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"UIBackgroundModes"];
+    has_audio_mode = [modes isKindOfClass:[NSArray class]] && [modes containsObject:@"audio"];
+  }
+  if (!has_audio_mode) {
+    return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                            enif_make_atom(env, "no_audio_background_mode"));
+  }
+  return enif_make_atom(env, g_keep_alive_active ? "running" : "idle");
+}
+
 static ErlNifFunc nif_funcs[] = {
     {"background_keep_alive", 0, nif_background_keep_alive, 0},
     {"background_stop", 0, nif_background_stop, 0},
+    {"background_status", 0, nif_background_status, 0},
 };
 
 ERL_NIF_INIT(mob_background_nif, nif_funcs, NULL, NULL, NULL, NULL)

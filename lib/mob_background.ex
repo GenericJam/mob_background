@@ -44,10 +44,12 @@ defmodule MobBackground do
   `mix mob.plugin.trust mob_background` records the fingerprint, then
   `mix mob.deploy --native`.
 
-  This plugin has two `host_requirements` the native build warns about on
-  every `mix mob.deploy --native` of the host — an Android `<service>`
-  declaration and the iOS `UIBackgroundModes` plist key. See the
-  *Requirements* sections below; without them `keep_alive/0` starts nothing.
+  This plugin has one `host_requirement` the native build warns about on
+  every `mix mob.deploy --native` of the host: the iOS `UIBackgroundModes`
+  plist key (see *iOS → Requirements* below). The plugin deliberately
+  doesn't add it to `Info.plist`: Apple rejects the mode in apps with no
+  audio feature, so declaring it is the app author's call. The Android
+  service class and its `<service>` declaration are added by the build.
 
   ## Usage
 
@@ -58,6 +60,10 @@ defmodule MobBackground do
       MobBackground.stop()
 
   `keep_alive/0` is idempotent — safe to call multiple times.
+
+  `status/0` is a read-only check that keep-alive can work in this host
+  and whether it is on; `MobBackground.SelfTest` uses it for
+  `mix mob.selftest`.
 
   ## iOS — silent audio session
 
@@ -132,17 +138,21 @@ defmodule MobBackground do
 
   ### Requirements
 
-  The `FOREGROUND_SERVICE` permissions are added automatically when the plugin
-  is activated. The host `AndroidManifest.xml` must additionally declare the
-  service inside `<application>` (a `<service>` subclass can't be auto-injected):
+  The build adds everything automatically when the plugin is activated: the
+  `FOREGROUND_SERVICE` permissions, the `BeamForegroundService` class (copied
+  into the app's sources next to the bridge) and its declaration inside
+  `<application>`:
 
       <service android:name="io.mob.background.BeamForegroundService"
           android:exported="false"
           android:foregroundServiceType="dataSync" />
 
-  The `BeamForegroundService` source ships in this package under
-  `priv/native/android/BeamForegroundService.kt` — copy it into your app's
-  host package (the build copies only the bridge automatically).
+  If your app has its own copy of `BeamForegroundService.kt` (from plugin
+  0.1.x, which asked you to copy it in) outside
+  `io/mob/background/`, delete it: the build's copy now provides the class
+  and two would not compile. A copy at `io/mob/background/BeamForegroundService.kt`
+  is overwritten by the build. A `<service>` you declared by hand is left
+  as is.
 
   ### Stop behaviour
 
@@ -180,5 +190,34 @@ defmodule MobBackground do
   @spec stop() :: :ok
   def stop do
     :mob_background_nif.background_stop()
+  end
+
+  @doc """
+  Reports, without changing anything, whether keep-alive can work in this
+  host and whether it is on.
+
+    * `:idle` — ready; keep-alive is off.
+    * `:running` — keep-alive is on (iOS: `keep_alive/0` was called and not
+      `stop/0`; Android: the foreground service is started).
+    * `{:error, :no_audio_background_mode}` — iOS: `Info.plist` lacks
+      `UIBackgroundModes` `audio`.
+    * `{:error, :bridge_not_registered}` — Android: `MobBackgroundBridge`
+      never registered with the NIF (`MobPluginBootstrap.registerAll` didn't
+      run, or a method lookup failed).
+    * `{:error, :no_activity}` — Android: the bridge never received an
+      Activity, so `keep_alive/0` would do nothing.
+    * `{:error, :service_not_declared}` / `{:error, :service_not_data_sync}`
+      — Android: the app manifest has no `BeamForegroundService` `<service>`,
+      or declares it without `foregroundServiceType="dataSync"`.
+    * `{:error, :no_jni_env}`, `{:error, :status_failed}`,
+      `{:error, {:unknown_status, code}}` — Android: the query itself failed.
+
+  `keep_alive/0` and `stop/0` take effect asynchronously on iOS, so a
+  status read right after either may not reflect it yet.
+  """
+  @spec status() ::
+          :idle | :running | {:error, atom()} | {:error, {:unknown_status, integer()}}
+  def status do
+    :mob_background_nif.background_status()
   end
 end

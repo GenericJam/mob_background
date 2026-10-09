@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Android: an unmodified host now compiles and gets a working keep-alive**
+  (MOB-423). `MobBackgroundBridge.kt` referenced
+  `io.mob.background.BeamForegroundService`, but the build copied only the
+  bridge, so a fresh `mix mob.new` host failed with `Unresolved reference`
+  until the author copied the service in by hand. `android.bridge_kt` now
+  lists both files, so the build copies `BeamForegroundService.kt` into
+  `io/mob/background/` next to the bridge, and the manifest contributes
+  `<service android:name="io.mob.background.BeamForegroundService"
+  android:exported="false" android:foregroundServiceType="dataSync" />`
+  through `android.manifest_application_snippets` (skipped when the host
+  already declares it). The two Android `host_requirements` are gone. Hosts
+  that copied `BeamForegroundService.kt` somewhere other than
+  `io/mob/background/` must delete their copy; one at that path is
+  overwritten.
+
+### Added
+
+- **On-device self-test** (MOB-418). `MobBackground.SelfTest` implements
+  `Mob.Plugin.SelfTest` and is declared in the manifest as `selftest:`. It
+  calls the new read-only `background_status/0` NIF, which never starts the
+  keep-alive: `:idle` / `:running` pass; the iOS NIF answers
+  `{:error, :no_audio_background_mode}` without `UIBackgroundModes` `audio`,
+  and the Android NIF answers `{:error, :bridge_not_registered}`,
+  `:no_activity`, `:service_not_declared` or `:service_not_data_sync`; all
+  fail, as does a NIF that isn't linked. Run it with `mix mob.selftest` from
+  a host app (mob_dev 0.7.17). Requires mob 0.9.15; `mob_version` in the
+  manifest is now `~> 0.9`.
+- **`MobBackground.status/0`**, the public face of `background_status/0`.
+
 ## [0.1.2] - 2026-09-30
 
 ### Fixed
