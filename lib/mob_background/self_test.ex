@@ -17,12 +17,12 @@ defmodule MobBackground.SelfTest do
       `MobBackgroundBridge.register()` has cached the bridge class and its
       `background_status` method; after that the answer comes from Kotlin,
       which checks the bridge has its Activity and that the app manifest
-      declares `BeamForegroundService` with `foregroundServiceType="dataSync"`
-      (resolved through `PackageManager`, so it also proves the class the
-      build copied in is the one declared). `:idle` / `:running` pass;
-      `:bridge_not_registered`, `:no_activity`, `:service_not_declared` and
-      `:service_not_data_sync` fail, since `keep_alive/0` would silently do
-      nothing in that host.
+      declares `BeamForegroundService` with a `foregroundServiceType` that
+      includes `dataSync` or `mediaPlayback` (resolved through
+      `PackageManager`, so it also proves the class the build copied in is
+      the one declared). `:idle` / `:running` pass; `:bridge_not_registered`,
+      `:no_activity`, `:service_not_declared` and `:service_type_unsupported`
+      fail, since `keep_alive/1` would silently do nothing in that host.
 
   `:running` passes because the app itself may hold the keep-alive on; the
   test doesn't touch it. Any other answer fails, and so does the host stub's
@@ -58,9 +58,10 @@ defmodule MobBackground.SelfTest do
     do:
       {:fail, "AndroidManifest.xml declares no io.mob.background.BeamForegroundService <service>"}
 
-  def classify({:error, :service_not_data_sync}),
+  def classify({:error, :service_type_unsupported}),
     do:
-      {:fail, "BeamForegroundService <service> lacks android:foregroundServiceType=\"dataSync\""}
+      {:fail,
+       "BeamForegroundService <service> declares neither dataSync nor mediaPlayback in android:foregroundServiceType"}
 
   def classify({:error, :no_audio_background_mode}),
     do:
