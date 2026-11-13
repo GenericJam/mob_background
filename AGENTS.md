@@ -1,6 +1,6 @@
 # mob_background — Agent Instructions
 
-You're in **mob_background**, a Mob capability plugin: keep the BEAM node alive when the screen locks or the app is backgrounded. iOS uses a silent `AVAudioEngine` session; Android uses a `dataSync` foreground service. Public API is `MobBackground.keep_alive/0` + `stop/0`. Extracted from mob core into an opt-in plugin.
+You're in **mob_background**, a Mob capability plugin: keep the BEAM node alive when the screen locks or the app is backgrounded. iOS uses a silent `AVAudioEngine` session; Android uses a foreground service, `dataSync` by default or `mediaPlayback` (`keep_alive(type: :media_playback)`, the host declares the `<service>`). Public API is `MobBackground.keep_alive/1` + `stop/0` + `status/0`. Extracted from mob core into an opt-in plugin.
 
 **Also read [`~/code/mob/AGENTS.md`](../mob/AGENTS.md)** for the system view and the cross-cutting pre-empt-failure rules. This file is mob_background-specific.
 
@@ -8,17 +8,17 @@ You're in **mob_background**, a Mob capability plugin: keep the BEAM node alive 
 
 ## What mob_background is, in one paragraph
 
-Continuous-execution keep-alive. `keep_alive/0` on iOS starts a silent `AVAudioEngine` loop with `AVAudioSessionCategoryOptionMixWithOthers` — the OS sees an active audio session and refuses to suspend the process; the user hears nothing; any music already playing is undisturbed. On Android the bridge starts `BeamForegroundService` (a `dataSync` foreground service that must display a persistent notification per Android policy). `stop/0` unwinds both. `keep_alive/0` is **idempotent** — safe to call multiple times.
+Continuous-execution keep-alive. `keep_alive/1` on iOS starts a silent `AVAudioEngine` loop with `AVAudioSessionCategoryOptionMixWithOthers` — the OS sees an active audio session and refuses to suspend the process; the user hears nothing; any music already playing is undisturbed. On Android the bridge starts `BeamForegroundService` (a foreground service of the requested type, `dataSync` by default, that must display a persistent notification per Android policy; its title/text come from `keep_alive/1`'s options). `stop/0` unwinds both. `keep_alive/1` is **idempotent** — safe to call multiple times.
 
 ## What mob_background is NOT
 
 * **Not `mob_wake`.** mob_wake fires a specific handler on an OS event (scheduler firing or silent push) and returns. mob_background KEEPS RUNNING while the app is backgrounded. If your work is "wake, do one thing, sleep" → `mob_wake`. If it's "keep this GenServer / upload / walking tracker running" → this. They stack: activate both when both patterns apply.
-* **Not a way to hide always-on servers on iOS.** Apple expects the declared background mode to match a user-visible app capability. `keep_alive/0` is legitimate for audio apps (music players, VoIP, radio); using it to hold a socket open on a chat app that has no audio feature is grounds for App Store rejection.
+* **Not a way to hide always-on servers on iOS.** Apple expects the declared background mode to match a user-visible app capability. `keep_alive/1` is legitimate for audio apps (music players, VoIP, radio); using it to hold a socket open on a chat app that has no audio feature is grounds for App Store rejection.
 * **Not a replacement for push wake.** For server-initiated work, prefer push (mob_notify + mob_push, or silent-push via mob_wake). Background keep-alive is for continuous work the USER has kicked off in-app.
 
 ## Anatomy of the plugin
 
-* `lib/mob_background.ex` — public `keep_alive/0` + `stop/0`, and the read-only `status/0`.
+* `lib/mob_background.ex` — public `keep_alive/1` + `stop/0`, and the read-only `status/0`.
 * `lib/mob_background/self_test.ex` — `MobBackground.SelfTest` (`Mob.Plugin.SelfTest`, run by `mix mob.selftest`): classifies the `background_status/0` answer. Never starts the keep-alive.
 * `src/mob_background_nif.erl` — Erlang NIF stub (tolerant `on_load`).
 * `priv/mob_plugin.exs` — manifest. Bridge implements `MobActivityAware` (needs Activity Context). `android.bridge_kt` is a list (bridge + `BeamForegroundService.kt`, both copied into the host's `io/mob/background/`); the `<service>` comes from `android.manifest_application_snippets`; FOREGROUND_SERVICE permissions auto-merged; only the iOS plist key is a `host_requirement`.
@@ -29,8 +29,8 @@ Continuous-execution keep-alive. `keep_alive/0` on iOS starts a silent `AVAudioE
 
 ## The two load-bearing invariants
 
-1. **`keep_alive/0` is idempotent.** iOS guards on `g_keep_alive_active`; Android's service `onStartCommand` is safe to call repeatedly. Both restart the keep-alive after an interruption (iOS audio-session interruption → automatic engine restart; Android START_STICKY).
-2. **The host requirements are real silent-failure landmines.** Without the Android `<service>` declaration `keep_alive/0` starts nothing; without iOS `UIBackgroundModes: [audio]` the silent session can't hold the app alive (and Apple rejects the mode for apps with no audio feature). The build contributes the `<service>` (manifest snippet). The plist key stays a `host_requirement` on purpose, not via `ios.plist_keys` (which mob_dev >= 0.6.16 could merge): Apple rejects the mode in apps with no audio feature, so the app author must opt in. Every `mix mob.deploy --native` warns about it. `status/0` (and the self-test) report both. Keep them accurate.
+1. **`keep_alive/1` is idempotent.** iOS guards on `g_keep_alive_active`; Android's service `onStartCommand` is safe to call repeatedly. Both restart the keep-alive after an interruption (iOS audio-session interruption → automatic engine restart; Android START_STICKY).
+2. **The host requirements are real silent-failure landmines.** Without the Android `<service>` declaration `keep_alive/1` starts nothing; without iOS `UIBackgroundModes: [audio]` the silent session can't hold the app alive (and Apple rejects the mode for apps with no audio feature). The build contributes the `<service>` (manifest snippet). The plist key stays a `host_requirement` on purpose, not via `ios.plist_keys` (which mob_dev >= 0.6.16 could merge): Apple rejects the mode in apps with no audio feature, so the app author must opt in. Every `mix mob.deploy --native` warns about it. `status/0` (and the self-test) report both. A host using `type: :media_playback` declares the `<service>` itself (with `FOREGROUND_SERVICE_MEDIA_PLAYBACK`); the bridge checks type and permission before starting, since a refusal inside the service can't be reported and a service started with `startForegroundService` that never reaches `startForeground` crashes the app. Keep them accurate.
 
 ## Cross-repo work
 
@@ -46,22 +46,22 @@ Elixir suite:
 mix test
 ```
 
-Covers manifest structure, the Kotlin the build copies into the host (every referenced class shipped, every `Service` declared as `dataSync`), the NIF stub, and `MobBackground.SelfTest`'s classification on host. Native code isn't exercised — `mix mob.selftest` from a host app runs the self-test on a device; for keep-alive itself deploy against a real device:
+Covers manifest structure, the Kotlin the build copies into the host (every referenced class shipped, every `Service` declared as `dataSync`, every `keep_alive/1` type started and permission-checked by the Kotlin), `keep_alive/1`'s option checks, the NIF stub, and `MobBackground.SelfTest`'s classification on host. Native code isn't exercised — `mix mob.selftest` from a host app runs the self-test on a device; for keep-alive itself deploy against a real device:
 
 ```bash
 mix mob.deploy --native --device <serial>
 ```
 
-Then call `MobBackground.keep_alive/0`, lock the screen, and confirm:
+Then call `MobBackground.keep_alive/1`, lock the screen, and confirm:
 * **iOS:** BEAM keeps running (RPC via `mix mob.connect` still resolves; timers keep ticking).
 * **Android:** persistent notification appears in the tray, BEAM keeps running.
 
 ## The pre-empt-failure rules that matter here
 
-1. **Never call `keep_alive/0` unconditionally at boot.** Apple expects the entitlement to match a user-facing capability being exercised. Gate on the user action that justifies staying alive (music playing, upload in progress).
+1. **Never call `keep_alive/1` unconditionally at boot.** Apple expects the entitlement to match a user-facing capability being exercised. Gate on the user action that justifies staying alive (music playing, upload in progress).
 2. **Android's foreground notification is REQUIRED.** Trying to skip it because "it looks ugly" causes the service to be killed within seconds. The persistent-notification requirement is Google's policy, not this plugin's design.
-3. **iOS audio-session interruption is handled but not silenced.** A phone call or Siri activation interrupts the silent session; the engine restarts automatically after. Do not assume `keep_alive/0` means "no interruptions ever" — the OS retains full control.
-4. **Bridge `MobActivityAware` = needs Activity Context.** Boot-time registration only works via the host's `MobPluginBootstrap.registerAll(this)` call from `MainActivity.onCreate`. A missing registration is a silent failure — `keep_alive/0` returns but does nothing.
+3. **iOS audio-session interruption is handled but not silenced.** A phone call or Siri activation interrupts the silent session; the engine restarts automatically after. Do not assume `keep_alive/1` means "no interruptions ever" — the OS retains full control.
+4. **Bridge `MobActivityAware` = needs Activity Context.** Boot-time registration only works via the host's `MobPluginBootstrap.registerAll(this)` call from `MainActivity.onCreate`. A missing registration makes `keep_alive/1` return `{:error, :bridge_not_registered}` and start nothing.
 
 ## Pre-commit + release
 

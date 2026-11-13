@@ -7,9 +7,9 @@ backgrounded.
 - **iOS:** a silent `AVAudioEngine` session (`MixWithOthers`) so the OS keeps
   the app alive. The user hears nothing; any music already playing is
   undisturbed.
-- **Android:** a `dataSync` foreground service with a low-priority persistent
-  notification. The OS won't kill it under memory pressure or when the screen
-  locks.
+- **Android:** a foreground service (`dataSync` by default, `mediaPlayback`
+  for audio apps) with a low-priority persistent notification. The OS won't
+  kill it under memory pressure or when the screen locks.
 
 ## Usage
 
@@ -17,11 +17,18 @@ backgrounded.
 # Keep the app alive when the screen locks (e.g. in mount/2):
 MobBackground.keep_alive()
 
+# An audio app: a mediaPlayback service (declare it, see below) and its own text:
+MobBackground.keep_alive(type: :media_playback, text: "MyApp is playing")
+
 # Allow suspension again when no longer needed:
 MobBackground.stop()
 ```
 
-`keep_alive/0` is idempotent — safe to call multiple times. `status/0` reports,
+`keep_alive/1` is idempotent — safe to call multiple times (a call with another
+type or text updates the running service). On Android it returns
+`{:error, reason}` when it started nothing (type not declared, permission
+missing, called from the background: Android 12+ only starts a foreground
+service from the foreground). `status/0` reports,
 without changing anything, whether keep-alive can work in this host and whether
 it's on.
 
@@ -52,6 +59,23 @@ android:foregroundServiceType="dataSync">` declaration. If you copied
 `BeamForegroundService.kt` into your app for plugin 0.1.x somewhere other
 than `io/mob/background/`, delete that copy.
 
+**`type: :media_playback`** (an app that plays audio; no Android 15 time
+limit) needs the host to declare the service with that type, since the
+manifest is fixed at build time. The build then leaves the declaration alone.
+In `android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+<!-- inside <application> -->
+<service android:name="io.mob.background.BeamForegroundService"
+    android:exported="false"
+    android:foregroundServiceType="mediaPlayback" />
+```
+
+(`"dataSync|mediaPlayback"` allows both.) The plugin doesn't declare
+`mediaPlayback` itself: Google Play asks every app to justify each
+foreground-service type it declares.
+
 The plugin deliberately doesn't add this one to your `Info.plist` (Apple
 rejects the mode in apps with no audio feature, so it's the app author's
 call); it prints as a warning on every `mix mob.deploy --native` of the host:
@@ -69,13 +93,15 @@ call); it prints as a warning on every `mix mob.deploy --native` of the host:
   keep-alive engine restarts automatically when recording (or a phone call)
   ends.
 - **Android notification:** Android requires every foreground service to post a
-  visible notification ("Running in background", `IMPORTANCE_LOW`, no sound).
-  There is no API to hide it.
+  visible notification (`IMPORTANCE_LOW`, no sound): the app name and "Running
+  in background" unless `keep_alive/1` gets `:title` / `:text`. There is no API
+  to hide it.
 - **Android 15 time limit:** with `targetSdk` 35+, Android allows a `dataSync`
   foreground service at most 6 hours per 24 hours while the app is in the
   background. When the limit is hit the service stops itself (logged under the
   `MobBackground` tag) and the notification disappears; the BEAM is not told.
-  Call `keep_alive/0` again once the app returns to the foreground.
+  Call `keep_alive/1` again once the app returns to the foreground, or use
+  `type: :media_playback` if the app plays audio (no limit).
 
 ## License
 

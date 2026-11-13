@@ -34,10 +34,12 @@ defmodule MobBackgroundTest do
       assert android.lang == :zig
     end
 
-    test "declares the foreground-service permissions the FGS needs (API 34+ typed)",
+    test "declares the foreground-service permissions the default dataSync FGS needs (API 34+ typed), and not mediaPlayback's",
          %{manifest: m} do
       assert "android.permission.FOREGROUND_SERVICE" in m.android.permissions
       assert "android.permission.FOREGROUND_SERVICE_DATA_SYNC" in m.android.permissions
+      # A host that keeps alive with type: :media_playback declares it itself.
+      refute "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" in m.android.permissions
     end
 
     test "declares the io.mob.background bridge class", %{manifest: m} do
@@ -127,9 +129,80 @@ defmodule MobBackgroundTest do
         assert snippet =~ ~s(android:exported="false")
       end
 
-      # The type startForeground passes must be the declared one, or Android 14+
-      # throws when the service starts.
+      # The type startForeground passes must be a declared one, or Android 14+
+      # throws when the service starts: dataSync for the plugin's declaration.
       assert kotlin["BeamForegroundService.kt"] =~ "FOREGROUND_SERVICE_TYPE_DATA_SYNC"
+    end
+
+    test "uses no androidx.core API newer than a Mob host's classpath has (core 1.9)", %{
+      kotlin: kotlin
+    } do
+      # ServiceCompat.startForeground/stopForeground arrived in androidx.core 1.12; a
+      # host on 1.9 failed to compile the service with it.
+      for {file, src} <- kotlin do
+        refute src =~ ~r/\bServiceCompat\./, "#{file} calls ServiceCompat (androidx.core 1.12+)"
+      end
+    end
+
+    test "every type keep_alive/1 accepts is one the service starts with and the bridge checks the permission of",
+         %{kotlin: kotlin} do
+      service = kotlin["BeamForegroundService.kt"]
+      bridge = kotlin["MobBackgroundBridge.kt"]
+      [supported] = Regex.run(~r/SUPPORTED_TYPES =\s*([^\n]+)/, service, capture: :all_but_first)
+
+      for {type, constant, permission} <- [
+            {:data_sync, "FOREGROUND_SERVICE_TYPE_DATA_SYNC", "FOREGROUND_SERVICE_DATA_SYNC"},
+            {:media_playback, "FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK",
+             "FOREGROUND_SERVICE_MEDIA_PLAYBACK"}
+          ] do
+        assert {_, "", ""} = MobBackground.nif_args(type: type)
+        assert supported =~ constant, "#{type}: #{constant} not in SUPPORTED_TYPES"
+
+        assert bridge =~ ~r/ServiceInfo\.#{constant} -> "android\.permission\.#{permission}"/,
+               "#{type}: the bridge doesn't check #{permission}"
+      end
+    end
+  end
+
+  describe "keep_alive/1 options" do
+    test "default to a dataSync service with the default notification text" do
+      # ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC = 1; "" = the default.
+      assert MobBackground.nif_args([]) == {1, "", ""}
+    end
+
+    test "media playback, title and text reach the NIF" do
+      # ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK = 2
+      assert MobBackground.nif_args(
+               type: :media_playback,
+               title: "FMutate",
+               text: "FMutate is playing"
+             ) ==
+               {2, "FMutate", "FMutate is playing"}
+    end
+
+    test "an unknown type or option raises instead of starting a service Android would refuse" do
+      assert_raise ArgumentError, ~r/unknown keep-alive type :location/, fn ->
+        MobBackground.keep_alive(type: :location)
+      end
+
+      assert_raise ArgumentError, ~r/unknown keys \[:txt\]/, fn ->
+        MobBackground.keep_alive(txt: "hi")
+      end
+    end
+
+    test "notification strings up to 255 bytes of UTF-8 pass; longer, NUL or non-UTF-8 raise" do
+      longest = String.duplicate("é", 127) <> "a"
+      assert byte_size(longest) == 255
+      assert {1, ^longest, ""} = MobBackground.nif_args(title: longest)
+
+      for {bad, message} <- [
+            {longest <> "a", "longer than 255 bytes"},
+            {"a\0b", "NUL"},
+            {<<0xFF>>, "UTF-8"},
+            {:playing, "UTF-8"}
+          ] do
+        assert_raise ArgumentError, ~r/#{message}/, fn -> MobBackground.nif_args(text: bad) end
+      end
     end
   end
 
@@ -153,7 +226,7 @@ defmodule MobBackgroundTest do
         bridge_not_registered: "MobBackgroundBridge not registered",
         no_activity: "has no Activity",
         service_not_declared: "declares no io.mob.background.BeamForegroundService",
-        service_not_data_sync: ~s(foregroundServiceType="dataSync"),
+        service_type_unsupported: "neither dataSync nor mediaPlayback",
         no_audio_background_mode: "UIBackgroundModes"
       ]
 
@@ -184,7 +257,7 @@ defmodule MobBackgroundTest do
     test "every NIF the public API calls is exported by the stub at the right arity" do
       exports = :mob_background_nif.module_info(:exports)
 
-      for fa <- [background_keep_alive: 0, background_stop: 0, background_status: 0] do
+      for fa <- [background_keep_alive: 3, background_stop: 0, background_status: 0] do
         assert fa in exports, "#{inspect(fa)} missing from mob_background_nif exports"
       end
     end
@@ -202,7 +275,7 @@ defmodule MobBackgroundTest do
     test "exports the documented operations" do
       exports = MobBackground.__info__(:functions)
 
-      for fa <- [keep_alive: 0, stop: 0, status: 0] do
+      for fa <- [keep_alive: 0, keep_alive: 1, stop: 0, status: 0] do
         assert fa in exports, "#{inspect(fa)} missing from MobBackground"
       end
     end

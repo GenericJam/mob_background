@@ -1,5 +1,54 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Android: choose the foreground-service type and the notification text.**
+  `MobBackground.keep_alive/1` takes `type: :data_sync` (default, as before) or
+  `type: :media_playback`, and the notification's `:title` (default: the app
+  name) and `:text` (default: "Running in background"). `mediaPlayback` is for
+  apps that play audio: Android 15's 6-hours-per-24 limit on `dataSync` doesn't
+  apply to it. The plugin still declares only `dataSync`; a host that uses
+  `:media_playback` declares the `<service>` itself with
+  `android:foregroundServiceType="mediaPlayback"` (or
+  `"dataSync|mediaPlayback"`) and `FOREGROUND_SERVICE_MEDIA_PLAYBACK` in its
+  `AndroidManifest.xml`, and the build leaves that declaration alone (Google
+  Play asks every app to justify each type it declares). A call while the
+  service runs updates its type and notification. iOS ignores the options.
+
+### Changed
+
+- **`keep_alive/1` reports what it couldn't start on Android** instead of
+  always answering `:ok`: `{:error, reason}` with `:type_not_declared` (the
+  `<service>` doesn't declare the type), `:no_type_permission` (Android 14+, the
+  type's `FOREGROUND_SERVICE_<TYPE>` permission is missing), `:start_not_allowed`
+  (Android 12+, called while the app is in the background),
+  `:service_not_declared`, `:no_activity`, `:bridge_not_registered`,
+  `:no_jni_env` or `:start_failed`. Both checks run before the service starts,
+  because Android refuses an undeclared type inside the service, where it
+  can't be reported. Code that matched `:ok = MobBackground.keep_alive()` must
+  handle the error. iOS still always answers `:ok`.
+- **`status/0` and the self-test accept a `mediaPlayback` service:**
+  `{:error, :service_not_data_sync}` is now
+  `{:error, :service_type_unsupported}`, for a `<service>` that declares
+  neither `dataSync` nor `mediaPlayback`.
+- The NIF is `background_keep_alive/3` (type, title, text) on both platforms
+  (was `/0`); `keep_alive/0` still works (all defaults).
+
+### Fixed
+
+- **Android: a refused `startForeground` no longer crashes the app.**
+  `BeamForegroundService` logs it (tag `MobBackground`) and stops; a sticky
+  restart (no intent) starts with the types the `<service>` declares.
+  `stop/0` from the background with nothing running no longer throws.
+- **Android: compiles in hosts on androidx.core older than 1.12.**
+  `BeamForegroundService` called `ServiceCompat.startForeground` (added in
+  androidx.core 1.12), so a host whose classpath has an older core (FMutate,
+  a mob_new-generated app: 1.9 through Compose) failed with
+  `Unresolved reference 'startForeground'` once the plugin was activated. It
+  uses the platform `startForeground` / `stopForeground` now.
+
 ## [0.2.0] - 2026-10-09
 
 ### Fixed

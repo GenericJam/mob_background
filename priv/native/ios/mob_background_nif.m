@@ -96,6 +96,9 @@ static void keep_alive_stop_engine(void) {
   }
 }
 
+// background_keep_alive(Type, Title, Text): the Android foreground-service
+// type and notification text; iOS has neither (the keep-alive is the silent
+// audio session), so they are ignored here.
 static ERL_NIF_TERM nif_background_keep_alive(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
   (void)argc;
   (void)argv;
@@ -172,7 +175,7 @@ static ERL_NIF_TERM nif_background_status(ErlNifEnv *env, int argc, const ERL_NI
 }
 
 static ErlNifFunc nif_funcs[] = {
-    {"background_keep_alive", 0, nif_background_keep_alive, 0},
+    {"background_keep_alive", 3, nif_background_keep_alive, 0},
     {"background_stop", 0, nif_background_stop, 0},
     {"background_status", 0, nif_background_status, 0},
 };

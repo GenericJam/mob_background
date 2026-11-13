@@ -6,7 +6,7 @@
   selftest: MobBackground.SelfTest,
   plugin_spec_version: 1,
   description:
-    "Background execution keep-alive: iOS silent AVAudioEngine session / Android dataSync foreground service",
+    "Background execution keep-alive: iOS silent AVAudioEngine session / Android foreground service (dataSync, or mediaPlayback)",
   nifs: [
     # iOS: Objective-C NIF — a silent AVAudioEngine session (MixWithOthers) so
     # the OS keeps the app running when the screen locks. lang: :objc
@@ -35,9 +35,12 @@
       "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
     ],
     # Spliced into the host's <application>; skipped when the host already
-    # declares a component with this android:name. The type must match the
-    # FOREGROUND_SERVICE_TYPE_DATA_SYNC BeamForegroundService passes to
-    # startForeground.
+    # declares a component with this android:name. dataSync is
+    # keep_alive/1's default type. A host that keeps alive with
+    # type: :media_playback declares this <service> itself with
+    # mediaPlayback (plus FOREGROUND_SERVICE_MEDIA_PLAYBACK), so hosts that
+    # don't play audio never declare that type (Play asks apps to justify
+    # each foreground-service type).
     manifest_application_snippets: [
       """
       <service android:name="io.mob.background.BeamForegroundService"

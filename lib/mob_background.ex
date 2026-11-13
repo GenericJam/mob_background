@@ -56,10 +56,16 @@ defmodule MobBackground do
       # Keep the app alive when the screen locks (e.g. in mount/2):
       MobBackground.keep_alive()
 
+      # An audio app: a mediaPlayback foreground service and its own text
+      # (needs the host <service> declaration in "Choosing the type" below):
+      MobBackground.keep_alive(type: :media_playback, text: "MyApp is playing")
+
       # Allow suspension again when background execution is no longer needed:
       MobBackground.stop()
 
-  `keep_alive/0` is idempotent — safe to call multiple times.
+  `keep_alive/1` is idempotent — safe to call multiple times; a call with
+  another type or text while it runs updates the service and its
+  notification.
 
   `status/0` is a read-only check that keep-alive can work in this host
   and whether it is on; `MobBackground.SelfTest` uses it for
@@ -68,7 +74,7 @@ defmodule MobBackground do
   ## iOS — silent audio session
 
   iOS suspends apps when the screen locks unless they hold an active background
-  execution mode. `keep_alive/0` starts a silent `AVAudioEngine` looping a
+  execution mode. `keep_alive/1` starts a silent `AVAudioEngine` looping a
   zero-filled buffer with `AVAudioSessionCategoryOptionMixWithOthers` — the OS
   sees an active audio session and keeps the process running, the user hears
   nothing, and any music already playing is undisturbed.
@@ -119,16 +125,50 @@ defmodule MobBackground do
   ## Android — foreground service
 
   On Android the OS equivalent of iOS background execution is a *foreground
-  service*. `keep_alive/0` starts `BeamForegroundService`, which starts in
-  the foreground with type `dataSync` and a low-priority persistent notification. The OS
-  will not kill a foreground service under memory pressure and will not
-  pause the process when the screen locks.
+  service*. `keep_alive/1` starts `BeamForegroundService`, which starts in
+  the foreground with the requested type (`dataSync` by default) and a
+  low-priority persistent notification. The OS will not kill a foreground
+  service under memory pressure and will not pause the process when the
+  screen locks.
+
+  ### Choosing the type
+
+  Android 14+ requires a foreground service to declare what it does: the
+  `<service>`'s `android:foregroundServiceType` in the manifest, a matching
+  `FOREGROUND_SERVICE_<TYPE>` permission, and the type passed to
+  `startForeground`, which must be one the manifest declares. The manifest is
+  fixed at build time, so the type is chosen in two places:
+
+    * `type: :data_sync` (default): the build declares the service as
+      `dataSync` and adds `FOREGROUND_SERVICE_DATA_SYNC`. Android 15 limits it
+      to 6 hours per 24 in the background (see below).
+    * `type: :media_playback`: for apps that play audio the user hears
+      (players, instruments, radio). No time limit. The host declares the
+      service itself, in `android/app/src/main/AndroidManifest.xml`; the build
+      then leaves that declaration alone:
+
+          <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+          ...
+          <application ...>
+              <service android:name="io.mob.background.BeamForegroundService"
+                  android:exported="false"
+                  android:foregroundServiceType="mediaPlayback" />
+
+      (`"dataSync|mediaPlayback"` declares both, for an app that uses
+      either.) The plugin doesn't declare `mediaPlayback` for every host: Google
+      Play asks each app to justify every foreground-service type it declares.
+
+  `keep_alive/1` checks before starting that the `<service>` declares the type
+  and, on Android 14+, that the app holds its permission, and returns
+  `{:error, :type_not_declared}` / `{:error, :no_type_permission}` instead of
+  starting a service Android would refuse.
 
   ### Visible notification (required by Android)
 
-  Android requires every foreground service to have a notification. It uses
-  the app name and the text "Running in background", with `IMPORTANCE_LOW`
-  so it makes no sound or vibration. There is no API to hide it.
+  Android requires every foreground service to have a notification. It shows
+  the `:title` (default: the app name) and `:text` (default: "Running in
+  background") given to `keep_alive/1`, with `IMPORTANCE_LOW` so it makes no
+  sound or vibration. There is no API to hide it.
 
   On Android 13+ (API 33) the notification is only *shown* in the status bar
   and drawer when the app holds `POST_NOTIFICATIONS` — declared and granted
@@ -154,12 +194,20 @@ defmodule MobBackground do
   is overwritten by the build. A `<service>` you declared by hand is left
   as is.
 
+  ### Starting from the background
+
+  Android 12+ refuses to start a foreground service while the app is in the
+  background (with few exemptions): call `keep_alive/1` while the app is in
+  the foreground, when the user starts what needs it. A refused start returns
+  `{:error, :start_not_allowed}`. Once running, the service keeps running in
+  the background, and a call that updates it is allowed.
+
   ### Stop behaviour
 
   `stop/0` sends `ACTION_STOP` to the service, which calls `stopForeground`
   and `stopSelf`. The OS removes the notification immediately. If the BEAM
   node goes silent (no incoming distribution traffic) the OS may still
-  eventually kill the process — `keep_alive/0` prevents aggressive
+  eventually kill the process — `keep_alive/1` prevents aggressive
   *background process killing* but not an eventual idle OOM kill after many
   hours of complete inactivity.
 
@@ -169,18 +217,86 @@ defmodule MobBackground do
   6 hours per 24 hours while the app is in the background. When the limit is
   reached the system calls the service's `onTimeout`, which logs a warning
   (tag `MobBackground`) and stops the service, so the app does not crash. The
-  BEAM is not notified. Call `keep_alive/0` again once the app is back in
-  the foreground.
+  BEAM is not notified. Call `keep_alive/1` again once the app is back in
+  the foreground, or use `type: :media_playback` if the app plays audio.
   """
+
+  # ServiceInfo.FOREGROUND_SERVICE_TYPE_* values.
+  @types %{data_sync: 1, media_playback: 2}
+  # Each notification string goes to the NIF as a C string: < 256 bytes, no NUL.
+  @max_text_bytes 255
+
+  @typedoc "The Android foreground-service type (iOS ignores it)."
+  @type type :: :data_sync | :media_playback
+
+  @type keep_alive_error ::
+          :bridge_not_registered
+          | :no_jni_env
+          | :no_activity
+          | :service_not_declared
+          | :type_not_declared
+          | :no_type_permission
+          | :start_not_allowed
+          | :start_failed
 
   @doc """
   Starts the keep-alive (silent audio session on iOS, foreground service on
   Android) so the OS does not suspend the app when the screen locks.
-  Idempotent — safe to call more than once.
+  Idempotent — safe to call more than once; a call while it runs updates the
+  service's type and notification.
+
+  Options (Android; iOS ignores them):
+
+    * `:type` — `:data_sync` (default) or `:media_playback`; the host's
+      `<service>` must declare it (see "Choosing the type").
+    * `:title` — the notification's title (default: the app name).
+    * `:text` — the notification's text (default: "Running in background").
+
+  Title and text are UTF-8 strings of at most #{@max_text_bytes} bytes.
+  Raises `ArgumentError` for an unknown option or type, or a bad string.
+
+  Returns `:ok` once the start is requested (iOS: always), or on Android
+  `{:error, reason}` when nothing was started: `:type_not_declared`,
+  `:no_type_permission`, `:start_not_allowed` (the app is in the background),
+  `:service_not_declared`, `:no_activity`, `:bridge_not_registered`,
+  `:no_jni_env` or `:start_failed`.
   """
-  @spec keep_alive() :: :ok
-  def keep_alive do
-    :mob_background_nif.background_keep_alive()
+  @spec keep_alive(type: type(), title: String.t(), text: String.t()) ::
+          :ok | {:error, keep_alive_error()}
+  def keep_alive(opts \\ []) do
+    {type, title, text} = nif_args(opts)
+    :mob_background_nif.background_keep_alive(type, title, text)
+  end
+
+  @doc false
+  # keep_alive/1's options as the NIF's arguments: {type int, title, text},
+  # "" for a default string.
+  @spec nif_args(keyword()) :: {pos_integer(), String.t(), String.t()}
+  def nif_args(opts) when is_list(opts) do
+    opts = Keyword.validate!(opts, type: :data_sync, title: "", text: "")
+
+    type =
+      Map.get(@types, opts[:type]) ||
+        raise ArgumentError,
+              "unknown keep-alive type #{inspect(opts[:type])}, expected one of #{inspect(Map.keys(@types))}"
+
+    {type, text!(:title, opts[:title]), text!(:text, opts[:text])}
+  end
+
+  defp text!(key, value) do
+    cond do
+      not is_binary(value) or not String.valid?(value) ->
+        raise ArgumentError, "#{inspect(key)} must be a UTF-8 string, got: #{inspect(value)}"
+
+      byte_size(value) > @max_text_bytes ->
+        raise ArgumentError, "#{inspect(key)} is longer than #{@max_text_bytes} bytes"
+
+      String.contains?(value, <<0>>) ->
+        raise ArgumentError, "#{inspect(key)} contains a NUL byte"
+
+      true ->
+        value
+    end
   end
 
   @doc """
@@ -197,7 +313,7 @@ defmodule MobBackground do
   host and whether it is on.
 
     * `:idle` — ready; keep-alive is off.
-    * `:running` — keep-alive is on (iOS: `keep_alive/0` was called and not
+    * `:running` — keep-alive is on (iOS: `keep_alive/1` was called and not
       `stop/0`; Android: the foreground service is started).
     * `{:error, :no_audio_background_mode}` — iOS: `Info.plist` lacks
       `UIBackgroundModes` `audio`.
@@ -205,14 +321,15 @@ defmodule MobBackground do
       never registered with the NIF (`MobPluginBootstrap.registerAll` didn't
       run, or a method lookup failed).
     * `{:error, :no_activity}` — Android: the bridge never received an
-      Activity, so `keep_alive/0` would do nothing.
-    * `{:error, :service_not_declared}` / `{:error, :service_not_data_sync}`
+      Activity, so `keep_alive/1` would do nothing.
+    * `{:error, :service_not_declared}` / `{:error, :service_type_unsupported}`
       — Android: the app manifest has no `BeamForegroundService` `<service>`,
-      or declares it without `foregroundServiceType="dataSync"`.
+      or declares it with neither `dataSync` nor `mediaPlayback` in
+      `foregroundServiceType`.
     * `{:error, :no_jni_env}`, `{:error, :status_failed}`,
       `{:error, {:unknown_status, code}}` — Android: the query itself failed.
 
-  `keep_alive/0` and `stop/0` take effect asynchronously on iOS, so a
+  `keep_alive/1` and `stop/0` take effect asynchronously on iOS, so a
   status read right after either may not reflect it yet.
   """
   @spec status() ::

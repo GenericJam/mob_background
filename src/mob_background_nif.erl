@@ -9,7 +9,7 @@
 %% host dev build neither is linked, so on_load tolerates the failure and the
 %% NIFs fall back to nif_error until the native merge links one.
 -module(mob_background_nif).
--export([background_keep_alive/0, background_stop/0, background_status/0]).
+-export([background_keep_alive/3, background_stop/0, background_status/0]).
 -on_load(init/0).
 
 init() ->
@@ -18,7 +18,10 @@ init() ->
         {error, _} -> ok
     end.
 
-background_keep_alive() ->
+%% Type: the Android foreground-service type (a ServiceInfo
+%% FOREGROUND_SERVICE_TYPE_* int); Title, Text: the notification's ("" =
+%% defaults). iOS ignores all three.
+background_keep_alive(_Type, _Title, _Text) ->
     erlang:nif_error(nif_not_loaded).
 
 background_stop() ->
