@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.ServiceCompat
 
 /**
  * Foreground service that keeps the BEAM node alive when the screen is locked.
@@ -68,12 +67,19 @@ class BeamForegroundService : Service() {
         // The bridge checked that the manifest declares the requested type. A
         // sticky restart has no intent: use the declared types keep_alive
         // supports. The type must be one the <service> declares, or Android 14+
-        // throws; ServiceCompat drops it below API 29, where it doesn't exist.
+        // throws; it doesn't exist below API 29. Platform calls, not
+        // ServiceCompat: that needs androidx.core 1.12, and Mob hosts compile
+        // against an older one (1.9 through Compose).
         val type = intent?.getIntExtra(EXTRA_TYPE, 0)?.takeIf { it != 0 } ?: declaredType()
         val title = intent?.getStringExtra(EXTRA_TITLE)?.takeIf { it.isNotEmpty() } ?: appName()
         val text = intent?.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotEmpty() } ?: DEFAULT_TEXT
         try {
-            ServiceCompat.startForeground(this, NOTIF_ID, buildNotification(title, text), type)
+            val notification = buildNotification(title, text)
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(NOTIF_ID, notification, type)
+            } else {
+                startForeground(NOTIF_ID, notification)
+            }
         } catch (e: Exception) {
             // A start the system refuses (a missing FOREGROUND_SERVICE_* permission, a
             // background start restriction after a sticky restart) must not crash the app.
@@ -107,7 +113,12 @@ class BeamForegroundService : Service() {
 
     private fun stopKeepAlive() {
         running = false
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        if (Build.VERSION.SDK_INT >= 24) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         stopSelf()
     }
 

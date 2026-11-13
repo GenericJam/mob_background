@@ -134,6 +134,16 @@ defmodule MobBackgroundTest do
       assert kotlin["BeamForegroundService.kt"] =~ "FOREGROUND_SERVICE_TYPE_DATA_SYNC"
     end
 
+    test "uses no androidx.core API newer than a Mob host's classpath has (core 1.9)", %{
+      kotlin: kotlin
+    } do
+      # ServiceCompat.startForeground/stopForeground arrived in androidx.core 1.12; a
+      # host on 1.9 failed to compile the service with it.
+      for {file, src} <- kotlin do
+        refute src =~ ~r/\bServiceCompat\./, "#{file} calls ServiceCompat (androidx.core 1.12+)"
+      end
+    end
+
     test "every type keep_alive/1 accepts is one the service starts with and the bridge checks the permission of",
          %{kotlin: kotlin} do
       service = kotlin["BeamForegroundService.kt"]

@@ -42,6 +42,12 @@
   `BeamForegroundService` logs it (tag `MobBackground`) and stops; a sticky
   restart (no intent) starts with the types the `<service>` declares.
   `stop/0` from the background with nothing running no longer throws.
+- **Android: compiles in hosts on androidx.core older than 1.12.**
+  `BeamForegroundService` called `ServiceCompat.startForeground` (added in
+  androidx.core 1.12), so a host whose classpath has an older core (FMutate,
+  a mob_new-generated app: 1.9 through Compose) failed with
+  `Unresolved reference 'startForeground'` once the plugin was activated. It
+  uses the platform `startForeground` / `stopForeground` now.
 
 ## [0.2.0] - 2026-10-09
 
