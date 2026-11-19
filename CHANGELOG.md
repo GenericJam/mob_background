@@ -1,5 +1,55 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Typed, owner-bound foreground service (`start/1,2`, `update/1`) and
+  `:microphone` mode.** Generalizes `mob_background` beyond `keep_alive/0` so
+  apps can start a foreground service in `:data_sync` or `:microphone` mode
+  bound to an `owner` process with a custom notification title, text, and up to
+  3 action buttons:
+  - Button taps deliver `{:mob_background, {:action, id}}` to the owner (using
+    `enif_make_existing_atom_len` — never creating atoms from Java input). If
+    a tap cannot be delivered to an owner (owner-less session or exited
+    owner/BEAM), the Android service stops itself and the NIF clears running
+    state so both sides stay synchronized.
+  - Owner exit (via ERTS process monitor + generation counter) automatically
+    stops the service on both Android and iOS without calling JNI from the
+    monitor callback.
+  - Asynchronous `startForeground` refusals (Android 14+ while-in-use rules)
+    and Android 15 `onTimeout` events deliver
+    `{:mob_background, {:error, :foreground_refused}}` and
+    `{:mob_background, {:error, :timeout}}` to the owner and clear running
+    state.
+  - `update/1` skips unchanged notifications in Zig and coalesces Android
+    notification posts to at most once every 250 ms while live; on iOS,
+    `update/1` returns `:ok` while running (no persistent notification surface;
+    `:microphone` mode returns `{:error, :unsupported}`).
+  - `keep_alive/0` and `stop/0` keep working unchanged (`keep_alive/0` starts
+    an owner-less `:data_sync` session when idle and is a no-op if any session
+    is running).
+- **Android manifest permissions & service type:** adds
+  `android.permission.FOREGROUND_SERVICE_MICROPHONE` to `priv/mob_plugin.exs`
+  and updates the contributed `<service>` snippet to
+  `android:foregroundServiceType="dataSync|microphone"`. (`RECORD_AUDIO`
+  remains the host app's responsibility.)
+
+### Changed
+
+- **Breaking:** `MobBackground.status/0` (and `background_status/0`) now
+  returns `{:running, :data_sync}` or `{:running, :microphone}` instead of bare
+  `:running`. Callers pattern-matching `:running` must update to
+  `{:running, _}` (or `{:running, mode}`). `MobBackground.SelfTest.classify/1`
+  now passes `:idle`, `{:running, :data_sync}`, and `{:running, :microphone}`
+  and treats bare `:running` as unexpected.
+
+### Fixed
+
+- **Fixed: MOB-505 — `BeamForegroundService` no longer uses androidx
+  `ServiceCompat`** (which needs `androidx.core` 1.12; Mob hosts use 1.9),
+  using platform `startForeground`/`stopForeground` instead.
+
 ## [0.2.0] - 2026-10-09
 
 ### Fixed

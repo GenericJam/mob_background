@@ -34,10 +34,12 @@ defmodule MobBackgroundTest do
       assert android.lang == :zig
     end
 
-    test "declares the foreground-service permissions the FGS needs (API 34+ typed)",
+    test "declares the foreground-service permissions without claiming RECORD_AUDIO",
          %{manifest: m} do
       assert "android.permission.FOREGROUND_SERVICE" in m.android.permissions
       assert "android.permission.FOREGROUND_SERVICE_DATA_SYNC" in m.android.permissions
+      assert "android.permission.FOREGROUND_SERVICE_MICROPHONE" in m.android.permissions
+      refute "android.permission.RECORD_AUDIO" in m.android.permissions
     end
 
     test "declares the io.mob.background bridge class", %{manifest: m} do
@@ -53,6 +55,7 @@ defmodule MobBackgroundTest do
       joined = Enum.join(m.host_requirements, "\n")
       assert joined =~ "UIBackgroundModes"
       refute joined =~ "BeamForegroundService"
+      refute joined =~ "RECORD_AUDIO"
     end
 
     test "every native source dir + Kotlin file the manifest references exists",
@@ -108,7 +111,7 @@ defmodule MobBackgroundTest do
       end
     end
 
-    test "every copied Service is declared in <application> as a dataSync foreground service",
+    test "every copied Service is declared in <application> with dataSync|microphone types",
          %{plugins: plugins, kotlin: kotlin} do
       snippets = for %{snippet: s} <- Merge.android_manifest_snippets(plugins), do: s
 
@@ -123,13 +126,24 @@ defmodule MobBackgroundTest do
         fq = "io.mob.background.#{name}"
         snippet = Enum.find(snippets, &(&1 =~ ~s(android:name="#{fq}")))
         assert snippet, "no manifest_application_snippets entry declares #{fq}"
-        assert snippet =~ ~s(android:foregroundServiceType="dataSync")
+        assert snippet =~ ~s(android:foregroundServiceType="dataSync|microphone")
         assert snippet =~ ~s(android:exported="false")
       end
 
-      # The type startForeground passes must be the declared one, or Android 14+
-      # throws when the service starts.
-      assert kotlin["BeamForegroundService.kt"] =~ "FOREGROUND_SERVICE_TYPE_DATA_SYNC"
+      # Both service type constants passed to startForeground must match the
+      # manifest declaration or Android 14+ throws when the service starts.
+      service_src = kotlin["BeamForegroundService.kt"]
+      assert service_src =~ "FOREGROUND_SERVICE_TYPE_DATA_SYNC"
+      assert service_src =~ "FOREGROUND_SERVICE_TYPE_MICROPHONE"
+    end
+
+    # MOB-505: Mob hosts compile against androidx.core 1.9, while ServiceCompat's
+    # startForeground/stopForeground require androidx.core 1.12+.
+    test "does not reference androidx ServiceCompat (MOB-505)", %{kotlin: kotlin} do
+      for {file, src} <- kotlin do
+        refute src =~ "ServiceCompat",
+               "#{file} references ServiceCompat, which fails against androidx.core 1.9"
+      end
     end
   end
 
@@ -141,14 +155,14 @@ defmodule MobBackgroundTest do
       assert Mob.Plugin.SelfTest.result?({:fail, reason})
     end
 
-    test "a status answer from the native side passes, whether keep-alive is off or on" do
-      for answer <- [:idle, :running] do
+    test "a status answer from the native side passes for :idle and {:running, mode}" do
+      for answer <- [:idle, {:running, :data_sync}, {:running, :microphone}] do
         assert SelfTest.classify(answer) == :pass
         assert Mob.Plugin.SelfTest.result?(SelfTest.classify(answer))
       end
     end
 
-    test "a host where keep_alive/0 would silently do nothing fails, naming the cause" do
+    test "a host where keep_alive/0 or start/2 would fail reports the cause" do
       cases = [
         bridge_not_registered: "MobBackgroundBridge not registered",
         no_activity: "has no Activity",
@@ -164,8 +178,8 @@ defmodule MobBackgroundTest do
       end
     end
 
-    test "an unexpected answer fails instead of passing" do
-      for answer <- [:ok, {:error, :status_failed}, {:error, {:unknown_status, 9}}, nil] do
+    test "bare :running and unexpected answers fail instead of passing" do
+      for answer <- [:running, :ok, {:error, :status_failed}, {:error, {:unknown_status, 9}}, nil] do
         assert {:fail, "background_status/0 returned " <> _} = result = SelfTest.classify(answer)
         assert Mob.Plugin.SelfTest.result?(result)
       end
@@ -184,7 +198,13 @@ defmodule MobBackgroundTest do
     test "every NIF the public API calls is exported by the stub at the right arity" do
       exports = :mob_background_nif.module_info(:exports)
 
-      for fa <- [background_keep_alive: 0, background_stop: 0, background_status: 0] do
+      for fa <- [
+            background_keep_alive: 0,
+            background_stop: 0,
+            background_status: 0,
+            background_start: 5,
+            background_update: 3
+          ] do
         assert fa in exports, "#{inspect(fa)} missing from mob_background_nif exports"
       end
     end
@@ -202,8 +222,218 @@ defmodule MobBackgroundTest do
     test "exports the documented operations" do
       exports = MobBackground.__info__(:functions)
 
-      for fa <- [keep_alive: 0, stop: 0, status: 0] do
+      for fa <- [keep_alive: 0, stop: 0, status: 0, start: 1, start: 2, update: 1] do
         assert fa in exports, "#{inspect(fa)} missing from MobBackground"
+      end
+    end
+  end
+
+  describe "start and update validation (nif_args/2 and notification_nif_args/1)" do
+    test "maps modes, defaults omitted :actions to [], and preserves owner" do
+      owner = self()
+
+      assert {^owner, 0, "Sync", "Uploading", []} =
+               MobBackground.nif_args(owner,
+                 mode: :data_sync,
+                 notification: %{title: "Sync", text: "Uploading"}
+               )
+
+      assert {^owner, 1, "Mic", "Listening", []} =
+               MobBackground.nif_args(owner,
+                 mode: :microphone,
+                 notification: %{title: "Mic", text: "Listening"}
+               )
+    end
+
+    test "normalizes up to 3 actions and round-trips emoji titles, texts, and labels unchanged" do
+      owner = self()
+
+      notification = %{
+        title: "🎙️ Listening · A4 −12¢",
+        text: "Singing → FMutate 🎵",
+        actions: [
+          %{id: :pause, label: "⏸ Pause"},
+          %{id: :record, label: "⏺ Record"},
+          %{id: :stop, label: "Stop"}
+        ]
+      }
+
+      expected_actions = [{:pause, "⏸ Pause"}, {:record, "⏺ Record"}, {:stop, "Stop"}]
+
+      assert {^owner, 1, "🎙️ Listening · A4 −12¢", "Singing → FMutate 🎵", ^expected_actions} =
+               MobBackground.nif_args(owner, mode: :microphone, notification: notification)
+
+      assert {"🎙️ Listening · A4 −12¢", "Singing → FMutate 🎵", ^expected_actions} =
+               MobBackground.notification_nif_args(notification)
+    end
+
+    test "rejects invalid owner, non-keyword opts, unknown options, and bad/missing mode" do
+      valid_notif = %{title: "Title", text: "Body"}
+
+      assert_raise ArgumentError, ~r/owner/, fn ->
+        MobBackground.nif_args(:not_a_pid, mode: :data_sync, notification: valid_notif)
+      end
+
+      assert_raise ArgumentError, ~r/owner/, fn ->
+        MobBackground.nif_args(nil, mode: :data_sync, notification: valid_notif)
+      end
+
+      assert_raise ArgumentError, ~r/keyword list/, fn ->
+        MobBackground.nif_args(self(), %{mode: :data_sync, notification: valid_notif})
+      end
+
+      assert_raise ArgumentError, ~r/unknown option/, fn ->
+        MobBackground.nif_args(self(), mode: :data_sync, notification: valid_notif, extra: true)
+      end
+
+      assert_raise ArgumentError, ~r/missing required option :mode/, fn ->
+        MobBackground.nif_args(self(), notification: valid_notif)
+      end
+
+      assert_raise ArgumentError, ~r/unknown mode/, fn ->
+        MobBackground.nif_args(self(), mode: :location, notification: valid_notif)
+      end
+    end
+
+    test "rejects missing, non-map, or malformed notification fields" do
+      assert_raise ArgumentError, ~r/missing required option :notification/, fn ->
+        MobBackground.nif_args(self(), mode: :data_sync)
+      end
+
+      assert_raise ArgumentError, ~r/map/, fn ->
+        MobBackground.nif_args(self(), mode: :data_sync, notification: [title: "A", text: "B"])
+      end
+
+      assert_raise ArgumentError, ~r/unknown notification key/, fn ->
+        MobBackground.notification_nif_args(%{title: "A", text: "B", action: []})
+      end
+
+      assert_raise ArgumentError, ~r/:title/, fn ->
+        MobBackground.notification_nif_args(%{text: "Body"})
+      end
+
+      assert_raise ArgumentError, ~r/:text/, fn ->
+        MobBackground.notification_nif_args(%{title: "Title"})
+      end
+    end
+
+    test "rejects non-UTF-8 and oversized title/text/label strings" do
+      bad_utf8 = <<0xFF, 0xFE>>
+      too_long = String.duplicate("a", 1025)
+
+      assert_raise ArgumentError, ~r/valid UTF-8/, fn ->
+        MobBackground.notification_nif_args(%{title: bad_utf8, text: "ok"})
+      end
+
+      assert_raise ArgumentError, ~r/valid UTF-8/, fn ->
+        MobBackground.notification_nif_args(%{title: "ok", text: bad_utf8})
+      end
+
+      assert_raise ArgumentError, ~r/1024 bytes/, fn ->
+        MobBackground.notification_nif_args(%{title: too_long, text: "ok"})
+      end
+
+      assert_raise ArgumentError, ~r/1024 bytes/, fn ->
+        MobBackground.notification_nif_args(%{title: "ok", text: too_long})
+      end
+
+      assert_raise ArgumentError, ~r/action :label must be valid UTF-8/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [%{id: :stop, label: bad_utf8}]
+        })
+      end
+
+      assert_raise ArgumentError, ~r/action :label exceeds 1024 bytes/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [%{id: :stop, label: too_long}]
+        })
+      end
+    end
+
+    test "rejects invalid action shapes, non-atom ids, duplicate ids, and > 3 actions" do
+      assert_raise ArgumentError, ~r/:actions must be a list/, fn ->
+        MobBackground.notification_nif_args(%{title: "ok", text: "ok", actions: :none})
+      end
+
+      assert_raise ArgumentError, ~r/at most 3/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [
+            %{id: :a, label: "A"},
+            %{id: :b, label: "B"},
+            %{id: :c, label: "C"},
+            %{id: :d, label: "D"}
+          ]
+        })
+      end
+
+      assert_raise ArgumentError, ~r/atom/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [%{id: "stop", label: "Stop"}]
+        })
+      end
+
+      assert_raise ArgumentError, ~r/atom/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [%{id: nil, label: "Stop"}]
+        })
+      end
+
+      assert_raise ArgumentError, ~r/duplicate/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [%{id: :stop, label: "One"}, %{id: :stop, label: "Two"}]
+        })
+      end
+    end
+
+    test "rejects malformed action maps, unknown action keys, and boolean/empty atom ids" do
+      assert_raise ArgumentError, ~r/expected action to be a map/, fn ->
+        MobBackground.notification_nif_args(%{title: "ok", text: "ok", actions: [:stop]})
+      end
+
+      assert_raise ArgumentError, ~r/unknown action key/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [%{id: :stop, label: "Stop", extra: 1}]
+        })
+      end
+
+      assert_raise ArgumentError, ~r/missing required action key :id/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [%{label: "Stop"}]
+        })
+      end
+
+      assert_raise ArgumentError, ~r/missing required action key :label/, fn ->
+        MobBackground.notification_nif_args(%{
+          title: "ok",
+          text: "ok",
+          actions: [%{id: :stop}]
+        })
+      end
+
+      for bad_id <- [true, false, :""] do
+        assert_raise ArgumentError, ~r/atom/, fn ->
+          MobBackground.notification_nif_args(%{
+            title: "ok",
+            text: "ok",
+            actions: [%{id: bad_id, label: "Stop"}]
+          })
+        end
       end
     end
   end

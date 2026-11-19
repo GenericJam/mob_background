@@ -1,119 +1,167 @@
 package io.mob.background
 
-import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.app.ServiceCompat
 
 /**
- * Foreground service that keeps the BEAM node alive when the screen is locked.
+ * Typed foreground service (`dataSync` or `microphone`) keeping the BEAM node
+ * alive when the screen is locked or another app is in front.
  *
- * Started via MobBackground.keep_alive/0 (via mob_background_nif's
- * background_keep_alive NIF -> MobBackgroundBridge). Stopped via
- * MobBackground.stop/0 (via background_stop NIF).
+ * Driven from `mob_background_nif` via [MobBackgroundBridge]. Action button
+ * presses arrive in [onStartCommand] and forward to the owner process through
+ * [MobBackgroundBridge.nativeAction]; if no owner is listening, the service
+ * stops itself so the notification never outlives its owner.
  *
- * A persistent low-priority notification is required by the OS to show a foreground
- * service — this is the price of keeping the process alive while the screen is off.
- * The notification appears in the status bar but makes no sound.
+ * Uses platform `Service.startForeground` / `stopForeground` directly rather
+ * than the androidx.core compat wrapper, which needs androidx.core 1.12+ while
+ * Mob hosts compile against 1.9 (MOB-505).
  *
- * Ships in the plugin's android.bridge_kt list, so the native build copies it
- * into the host's io/mob/background/ next to MobBackgroundBridge.kt, and the
- * manifest's android.manifest_application_snippets declares its <service>
- * (foregroundServiceType="dataSync") in the host AndroidManifest.xml.
+ * Ships in the plugin's `android.bridge_kt` list, so the native build copies it
+ * into the host's `io/mob/background/` next to `MobBackgroundBridge.kt`, and
+ * `android.manifest_application_snippets` declares its `<service>` with
+ * `foregroundServiceType="dataSync|microphone"`.
  */
 class BeamForegroundService : Service() {
 
     companion object {
-        private const val NOTIF_ID      = 9820
-        private const val CHANNEL_ID    = "mob_beam_fg"
-        private const val TAG           = "MobBackground"
-        const val ACTION_START = "mob.beam.START"
-        const val ACTION_STOP  = "mob.beam.STOP"
+        private const val TAG = "MobBackground"
+    }
 
-        // True between a successful startForeground and stop/destroy. Read by
-        // MobBackgroundBridge.background_status() (MobBackground.status/0).
-        @Volatile
-        var running = false
-            private set
+    override fun onCreate() {
+        super.onCreate()
+        MobBackgroundBridge.attach(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopKeepAlive()
+        if (intent?.action == MobBackgroundBridge.ACTION_BUTTON) {
+            val id = intent.getStringExtra(MobBackgroundBridge.EXTRA_BUTTON)
+            if (id != null) {
+                val delivered = try {
+                    MobBackgroundBridge.nativeAction(id)
+                } catch (_: UnsatisfiedLinkError) {
+                    false
+                }
+                // Nobody listening (BEAM restarted or owner died): take the notification away.
+                if (!delivered) {
+                    MobBackgroundBridge.markStoppedFromService()
+                    stopForegroundRemove()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+            }
+            return if (MobBackgroundBridge.isSticky()) START_STICKY else START_NOT_STICKY
+        }
+
+        val snap = MobBackgroundBridge.snapshot()
+        val mode = if (intent != null && intent.hasExtra(MobBackgroundBridge.EXTRA_MODE)) {
+            intent.getIntExtra(MobBackgroundBridge.EXTRA_MODE, snap.mode)
+        } else {
+            snap.mode
+        }
+        val sticky = if (intent != null && intent.hasExtra(MobBackgroundBridge.EXTRA_STICKY)) {
+            intent.getBooleanExtra(MobBackgroundBridge.EXTRA_STICKY, snap.sticky)
+        } else {
+            snap.sticky
+        }
+
+        try {
+            val notification = MobBackgroundBridge.buildForStart(this, mode)
+            if (Build.VERSION.SDK_INT >= 30) {
+                val fgsType = if (mode == MobBackgroundBridge.MODE_MICROPHONE) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                }
+                startForeground(MobBackgroundBridge.NOTIFICATION_ID, notification, fgsType)
+            } else if (Build.VERSION.SDK_INT >= 29) {
+                if (mode == MobBackgroundBridge.MODE_MICROPHONE) {
+                    startForeground(MobBackgroundBridge.NOTIFICATION_ID, notification)
+                } else {
+                    startForeground(
+                        MobBackgroundBridge.NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    )
+                }
+            } else {
+                startForeground(MobBackgroundBridge.NOTIFICATION_ID, notification)
+            }
+            // A stop arrived before startForeground completed: only now, in the
+            // foreground, may the service stop without crashing the app.
+            if (MobBackgroundBridge.foregrounded()) {
+                stopForegroundRemove()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        } catch (e: Exception) {
+            // Android 14+ while-in-use rules: app moved to background, RECORD_AUDIO revoked, etc.
+            Log.e(TAG, "startForeground refused", e)
+            val (noMorePending, notifyFailure) = MobBackgroundBridge.startFailed()
+            if (notifyFailure) {
+                try {
+                    MobBackgroundBridge.nativeFailed("foreground_refused")
+                } catch (_: UnsatisfiedLinkError) {
+                }
+            }
+            if (noMorePending) stopSelf()
             return START_NOT_STICKY
         }
-        ensureChannel()
-        // Must match android:foregroundServiceType="dataSync" on the manifest
-        // <service>. Passed explicitly rather than relying on the manifest
-        // lookup; ServiceCompat drops the type below API 29, where it doesn't exist.
-        ServiceCompat.startForeground(
-            this, NOTIF_ID, buildNotification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-        )
-        running = true
-        return START_STICKY
+
+        return if (sticky) START_STICKY else START_NOT_STICKY
     }
 
     // Android 15+ (targetSdk 35) caps dataSync foreground services at 6h per
-    // 24h in the background. When the cap is hit the system calls onTimeout
-    // and the service must stop within a few seconds, or the app crashes with
-    // ForegroundServiceDidNotStopInTimeException. The BEAM is not notified;
-    // keep_alive/0 must be called again (from the foreground) to restart.
+    // 24h in the background; microphone has no such limit. Regardless of type,
+    // Android requires stopping within a few seconds once onTimeout fires.
     override fun onTimeout(startId: Int, fgsType: Int) {
-        Log.w(TAG, "dataSync foreground service time limit reached (startId=$startId, fgsType=$fgsType); stopping keep-alive")
-        stopKeepAlive()
+        if (Build.VERSION.SDK_INT >= 29 && fgsType == ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) {
+            Log.w(TAG, "dataSync foreground service time limit reached (startId=$startId, fgsType=$fgsType); stopping")
+        } else {
+            Log.w(TAG, "foreground service timeout called (startId=$startId, fgsType=$fgsType); stopping")
+        }
+        handleTimeout()
     }
 
-    // Single-argument overload (API 34+). The system calls it for
-    // shortService timeouts; dataSync gets the two-argument overload above on
-    // API 35+. Handled the same way so no timeout path can leave us running.
     @Deprecated("Superseded by onTimeout(Int, Int) on API 35")
     override fun onTimeout(startId: Int) {
-        Log.w(TAG, "foreground service time limit reached (startId=$startId); stopping keep-alive")
-        stopKeepAlive()
+        Log.w(TAG, "foreground service time limit reached (startId=$startId); stopping")
+        handleTimeout()
     }
 
-    private fun stopKeepAlive() {
-        running = false
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+    private fun handleTimeout() {
+        MobBackgroundBridge.markStoppedFromService()
+        try {
+            MobBackgroundBridge.nativeFailed("timeout")
+        } catch (_: UnsatisfiedLinkError) {
+        }
+        stopForegroundRemove()
         stopSelf()
     }
 
+    private fun stopForegroundRemove() {
+        if (Build.VERSION.SDK_INT >= 24) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
     override fun onDestroy() {
-        running = false
+        MobBackgroundBridge.detach(this)
+        // A throttled update queued before stop may have reposted after
+        // stopForeground removed the notification; cancel it here so dead buttons
+        // never remain visible.
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .cancel(MobBackgroundBridge.NOTIFICATION_ID)
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
-
-    private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            if (nm.getNotificationChannel(CHANNEL_ID) == null) {
-                nm.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "Background", NotificationManager.IMPORTANCE_LOW)
-                )
-            }
-        }
-    }
-
-    private fun buildNotification(): Notification {
-        val appName = try {
-            packageManager.getApplicationLabel(applicationInfo).toString()
-        } catch (_: Exception) { "App" }
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(appName)
-            .setContentText("Running in background")
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-    }
 }

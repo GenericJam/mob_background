@@ -6,14 +6,14 @@
   selftest: MobBackground.SelfTest,
   plugin_spec_version: 1,
   description:
-    "Background execution keep-alive: iOS silent AVAudioEngine session / Android dataSync foreground service",
+    "Background execution keep-alive and typed foreground service: iOS silent AVAudioEngine session / Android dataSync|microphone foreground service",
   nifs: [
     # iOS: Objective-C NIF — a silent AVAudioEngine session (MixWithOthers) so
     # the OS keeps the app running when the screen locks. lang: :objc
     # (-fobjc-arc); platform: :ios so it isn't pulled into the Android build.
     %{module: :mob_background_nif, native_dir: "priv/native/ios", lang: :objc, platform: :ios},
-    # Android: zig NIF bridging to the foreground-service start/stop in the
-    # Kotlin io.mob.background.MobBackgroundBridge.
+    # Android: zig NIF bridging to the typed foreground-service bridge in
+    # io.mob.background.MobBackgroundBridge.
     %{module: :mob_background_nif, native_dir: "priv/native/jni", lang: :zig, platform: :android}
   ],
   android: %{
@@ -26,23 +26,26 @@
       "priv/native/android/BeamForegroundService.kt"
     ],
     # Implements MobActivityAware — it needs the Activity Context to start the
-    # foreground service.
+    # foreground service and check permissions.
     bridge_class: "io.mob.background.MobBackgroundBridge",
-    # The foreground service these permissions cover (API 34+ split out the
-    # typed one).
+    # Foreground service permissions (API 34+ split out per-type permissions).
+    # RECORD_AUDIO is deliberately NOT declared here: hosts using :microphone
+    # mode declare and request RECORD_AUDIO themselves (mob_new hosts already
+    # declare it).
     permissions: [
       "android.permission.FOREGROUND_SERVICE",
-      "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+      "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+      "android.permission.FOREGROUND_SERVICE_MICROPHONE"
     ],
     # Spliced into the host's <application>; skipped when the host already
-    # declares a component with this android:name. The type must match the
-    # FOREGROUND_SERVICE_TYPE_DATA_SYNC BeamForegroundService passes to
-    # startForeground.
+    # declares a component with this android:name. The types must match
+    # FOREGROUND_SERVICE_TYPE_DATA_SYNC / FOREGROUND_SERVICE_TYPE_MICROPHONE
+    # that BeamForegroundService passes to startForeground.
     manifest_application_snippets: [
       """
       <service android:name="io.mob.background.BeamForegroundService"
           android:exported="false"
-          android:foregroundServiceType="dataSync" />
+          android:foregroundServiceType="dataSync|microphone" />
       """
     ]
   },
