@@ -49,9 +49,9 @@ class BeamForegroundService : Service() {
                 }
                 // Nobody listening (BEAM restarted or owner died): take the notification away.
                 if (!delivered) {
-                    MobBackgroundBridge.markStoppedFromService()
+                    val mayStop = MobBackgroundBridge.markStoppedFromService()
                     stopForegroundRemove()
-                    stopSelf()
+                    if (mayStop) stopSelf()
                     return START_NOT_STICKY
                 }
             }
@@ -135,13 +135,18 @@ class BeamForegroundService : Service() {
     }
 
     private fun handleTimeout() {
-        MobBackgroundBridge.markStoppedFromService()
-        try {
-            MobBackgroundBridge.nativeFailed("timeout")
-        } catch (_: UnsatisfiedLinkError) {
-        }
+        // Leaving the foreground answers the time limit. A newer start in
+        // flight owns the session now: it isn't told, and stops the service
+        // itself once foregrounded.
+        val mayStop = MobBackgroundBridge.markStoppedFromService()
         stopForegroundRemove()
-        stopSelf()
+        if (mayStop) {
+            try {
+                MobBackgroundBridge.nativeFailed("timeout")
+            } catch (_: UnsatisfiedLinkError) {
+            }
+            stopSelf()
+        }
     }
 
     private fun stopForegroundRemove() {

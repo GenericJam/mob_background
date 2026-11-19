@@ -288,9 +288,11 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
         )
         val prevState: NoticeState
         val prevLive: Boolean
+        val prevStopWanted: Boolean
         synchronized(lock) {
             prevState = state
             prevLive = live
+            prevStopWanted = stopWanted
             state = next
             pendingStarts++
             stopWanted = false
@@ -312,6 +314,9 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
             Log.e(TAG, "startForegroundService refused", e)
             synchronized(lock) {
                 if (pendingStarts > 0) pendingStarts--
+                // A stop asked for an earlier start still in flight still holds:
+                // that start's foregrounded() must stop the service.
+                stopWanted = stopWanted || prevStopWanted
                 if (!stopWanted) {
                     state = prevState
                     live = prevLive
@@ -364,13 +369,14 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
         Pair(noMorePending, noMorePending && !wasStopWanted)
     }
 
-    internal fun markStoppedFromService() {
-        synchronized(lock) {
-            live = false
-            if (pendingStarts > 0) {
-                stopWanted = true
-            }
-        }
+    // The service is stopping itself (undelivered tap, time limit). Returns
+    // whether it may stopSelf() now: not while a newer startForegroundService
+    // hasn't reached startForeground (Android would crash it); then that
+    // start's foregrounded() stops it instead.
+    internal fun markStoppedFromService(): Boolean = synchronized(lock) {
+        live = false
+        if (pendingStarts > 0) stopWanted = true
+        pendingStarts == 0
     }
 
     internal fun snapshot(): NoticeState = synchronized(lock) { state }

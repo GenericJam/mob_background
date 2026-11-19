@@ -271,15 +271,15 @@ defmodule MobBackgroundTest do
       valid_notif = %{title: "Title", text: "Body"}
 
       assert_raise ArgumentError, ~r/owner/, fn ->
-        MobBackground.nif_args(:not_a_pid, mode: :data_sync, notification: valid_notif)
+        MobBackground.start(:not_a_pid, mode: :data_sync, notification: valid_notif)
       end
 
       assert_raise ArgumentError, ~r/owner/, fn ->
-        MobBackground.nif_args(nil, mode: :data_sync, notification: valid_notif)
+        MobBackground.start(nil, mode: :data_sync, notification: valid_notif)
       end
 
       assert_raise ArgumentError, ~r/keyword list/, fn ->
-        MobBackground.nif_args(self(), %{mode: :data_sync, notification: valid_notif})
+        MobBackground.start(%{mode: :data_sync, notification: valid_notif})
       end
 
       assert_raise ArgumentError, ~r/unknown option/, fn ->

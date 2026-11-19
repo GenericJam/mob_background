@@ -328,7 +328,7 @@ defmodule MobBackground do
   """
   @spec start(keyword()) ::
           :ok | {:error, :permission | :refused | :unavailable | :owner_dead | :unsupported}
-  def start(opts) when is_list(opts), do: start(self(), opts)
+  def start(opts), do: start(self(), opts)
 
   @doc """
   Starts (or retargets) the typed foreground service / keep-alive session bound
@@ -355,7 +355,7 @@ defmodule MobBackground do
   """
   @spec start(pid(), keyword()) ::
           :ok | {:error, :permission | :refused | :unavailable | :owner_dead | :unsupported}
-  def start(owner, opts) when is_pid(owner) do
+  def start(owner, opts) do
     {owner_arg, mode_code, title, text, actions} = nif_args(owner, opts)
     :mob_background_nif.background_start(owner_arg, mode_code, title, text, actions)
   end
@@ -380,7 +380,10 @@ defmodule MobBackground do
   default low-priority foreground service notification on Android) if idle.
 
   Idempotent — safe to call more than once. Does nothing and returns `:ok` if
-  any session (owner-bound or owner-less) is already running.
+  any session (owner-bound or owner-less) is already running. If that is an
+  owner session from `start/2`, the process keeps running only as long as that
+  session does: it ends when its owner exits, Android refuses or times it out,
+  or `stop/0` is called. Don't mix the two in one app unless that is intended.
   """
   @spec keep_alive() :: :ok
   def keep_alive do
