@@ -6,7 +6,7 @@
   selftest: MobBackground.SelfTest,
   plugin_spec_version: 1,
   description:
-    "Background execution keep-alive and typed foreground service: iOS silent AVAudioEngine session / Android dataSync|microphone foreground service",
+    "Background execution keep-alive and typed foreground service: iOS silent AVAudioEngine session / Android dataSync|microphone (or host-declared mediaPlayback) foreground service",
   nifs: [
     # iOS: Objective-C NIF — a silent AVAudioEngine session (MixWithOthers) so
     # the OS keeps the app running when the screen locks. lang: :objc

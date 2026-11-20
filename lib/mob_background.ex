@@ -126,8 +126,9 @@ defmodule MobBackground do
   is already running, `keep_alive/0` is a no-op and does not override the
   running session.
 
-  `status/0` is a read-only check that keep-alive can work in this host and
-  whether a session is active (`:idle` or `{:running, mode}`);
+  `status/0` is a read-only check that this host is wired for at least one
+  mode (the service is declared with a type the plugin can start) and whether
+  a session is active (`:idle` or `{:running, mode}`);
   `MobBackground.SelfTest` uses it for `mix mob.selftest`.
 
   ## Modes
@@ -213,11 +214,11 @@ defmodule MobBackground do
 
   ### Choosing the type
 
-  Android 14+ requires a foreground service to declare what it does: the
-  `<service>`'s `android:foregroundServiceType` in the manifest, a matching
-  `FOREGROUND_SERVICE_<TYPE>` permission, and the type passed to
-  `startForeground`, which must be one the manifest declares. The manifest is
-  fixed at build time, so the type is chosen in two places:
+  Android requires a foreground service to declare what it does: the type
+  passed to `startForeground` must be one the `<service>`'s
+  `android:foregroundServiceType` declares (API 29+), and Android 14+ makes the
+  type mandatory, each with its own `FOREGROUND_SERVICE_<TYPE>` permission. The
+  manifest is fixed at build time, so the type is chosen in two places:
 
     * `:data_sync` (and `keep_alive/0`) / `:microphone`: unless the host
       declares its own `<service>`, the build declares it as
@@ -459,10 +460,12 @@ defmodule MobBackground do
   end
 
   @doc """
-  Reports, without changing anything, whether background keep-alive can work in
-  this host and whether a session is currently running.
+  Reports, without changing anything, whether this host is wired for at least
+  one mode and whether a session is currently running.
 
-    * `:idle` — ready; no session is running.
+    * `:idle` — no session is running, and the host is wired for at least one
+      mode (on Android, a `<service>` with `dataSync`, `microphone`, or
+      `mediaPlayback`; `keep_alive/0` additionally needs `dataSync`).
     * `{:running, :data_sync}` — active in `:data_sync` mode (either from
       `keep_alive/0` or `start/2`).
     * `{:running, :microphone}` — active in `:microphone` mode (Android).
