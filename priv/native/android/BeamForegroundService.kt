@@ -136,8 +136,8 @@ class BeamForegroundService : Service() {
 
     private fun handleTimeout() {
         // Leaving the foreground answers the time limit. A newer start in
-        // flight owns the session now: it isn't told, and stops the service
-        // itself once foregrounded.
+        // flight owns the session now: it carries on once foregrounded, or
+        // its refusal reaches its owner through startFailed().
         val mayStop = MobBackgroundBridge.markStoppedFromService()
         stopForegroundRemove()
         if (mayStop) {

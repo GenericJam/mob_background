@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-19
+
 ### Added
 
 - **Typed, owner-bound foreground service (`start/1,2`, `update/1`) and
@@ -34,6 +36,17 @@
   and updates the contributed `<service>` snippet to
   `android:foregroundServiceType="dataSync|microphone"`. (`RECORD_AUDIO`
   remains the host app's responsibility.)
+
+### Upgrading
+
+- **Every host that activates the plugin now declares the microphone
+  foreground-service type and `FOREGROUND_SERVICE_MICROPHONE`**, including apps
+  that only call `keep_alive/0`. On Google Play that means completing the
+  foreground-service declaration for microphone use in the Play Console; an app
+  with no microphone feature can be rejected for it. Such apps should stay on
+  0.2.x until the service type can be chosen per host.
+- Update the dependency to `{:mob_background, "~> 0.3"}`; `start/1,2` and
+  `update/1` don't exist in 0.2.
 
 ### Changed
 

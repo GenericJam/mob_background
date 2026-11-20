@@ -36,7 +36,7 @@ defmodule MobBackground do
   ## Installation
 
       # mix.exs
-      {:mob_background, "~> 0.2"}
+      {:mob_background, "~> 0.3"}
 
       # mob.exs
       config :mob, :plugins, [:mob_background]

@@ -370,12 +370,12 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
     }
 
     // The service is stopping itself (undelivered tap, time limit). Returns
-    // whether it may stopSelf() now: not while a newer startForegroundService
-    // hasn't reached startForeground (Android would crash it); then that
-    // start's foregrounded() stops it instead.
+    // whether it may stopSelf() now. Not while a newer startForegroundService
+    // hasn't reached startForeground: Android would crash it, and that start
+    // belongs to a newer session, which then either reaches the foreground
+    // (and carries on) or is refused, which startFailed() reports to its owner.
     internal fun markStoppedFromService(): Boolean = synchronized(lock) {
         live = false
-        if (pendingStarts > 0) stopWanted = true
         pendingStarts == 0
     }
 

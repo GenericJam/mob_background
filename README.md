@@ -98,7 +98,7 @@ host app to check on a device that the native side is linked and wired up.
 
 ```elixir
 # mix.exs
-{:mob_background, "~> 0.2"}
+{:mob_background, "~> 0.3"}
 
 # mob.exs
 config :mob, :plugins, [:mob_background]
