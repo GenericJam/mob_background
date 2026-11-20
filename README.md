@@ -5,19 +5,20 @@ Background execution keep-alive and typed foreground service for
 the screen locks or another app is in front.
 
 - **iOS:** a silent `AVAudioEngine` session (`MixWithOthers`) for `:data_sync`
-  keep-alive. The user hears nothing; any music already playing is undisturbed.
-  Mode `:microphone` returns `{:error, :unsupported}` (see *Modes* below).
-- **Android:** `BeamForegroundService`, a typed foreground service (`dataSync`
-  or `microphone`) with either a low-priority default notification (`keep_alive/0`)
-  or an owner-bound dynamic notification with action buttons (`start/1,2` +
-  `update/1`).
+  and `:media_playback` keep-alive. The user hears nothing; any music already
+  playing is undisturbed. Mode `:microphone` returns `{:error, :unsupported}`
+  (see *Modes* below).
+- **Android:** `BeamForegroundService`, a typed foreground service (`dataSync`,
+  `microphone`, or `mediaPlayback`) with either a low-priority default
+  notification (`keep_alive/0`) or an owner-bound dynamic notification with
+  action buttons (`start/1,2` + `update/1`).
 
 ## Usage
 
 ### Typed, owner-bound session (`start/1,2` + `update/1`)
 
-Use `start/1,2` when you need `:microphone` mode, custom notification text, or
-interactive notification buttons:
+Use `start/1,2` when you need `:microphone` or `:media_playback` mode, custom
+notification text, or interactive notification buttons:
 
 ```elixir
 :ok =
@@ -67,7 +68,7 @@ automatically. While running, `owner` receives:
   `:idle`, `update/1` returns `{:error, :not_running}`).
 - `{:mob_background, {:error, :timeout}}` — Android 15 reached the `dataSync`
   6-hour background limit (`onTimeout`) and stopped the service. Session is
-  over afterwards.
+  over afterwards. (`:media_playback` and `:microphone` have no such limit.)
 
 ### Simple keep-alive (`keep_alive/0`)
 
@@ -84,6 +85,7 @@ low-importance notification (`mob_beam_fg`) when idle, and is an idempotent
 no-op when any session (owner-bound or owner-less) is already running.
 
 `status/0` returns `:idle`, `{:running, :data_sync}`, `{:running, :microphone}`,
+`{:running, :media_playback}`,
 or `{:error, reason}` without changing state. Run `mix mob.selftest` from a
 host app to check on a device that the native side is linked and wired up.
 
@@ -93,6 +95,10 @@ host app to check on a device that the native side is linked and wired up.
 |------|------------------|--------------|-----------------------------|------------------|
 | `:data_sync` | `dataSync` | Silent `AVAudioEngine` loop (`MixWithOthers`); no notification UI / actions | `POST_NOTIFICATIONS` for Android 13+ visibility only | 6h per 24h in background |
 | `:microphone` | `microphone` | `{:error, :unsupported}` (use app's active recording `AVAudioSession` + `UIBackgroundModes: [audio]`) | Android `RECORD_AUDIO` granted + app in foreground (`Android 14+`) | None |
+| `:media_playback` | `mediaPlayback` (host declares the `<service>`, see below) | Same as `:data_sync` | `POST_NOTIFICATIONS` for Android 13+ visibility only | None |
+
+`:media_playback` is for apps that play audio the user hears (players,
+instruments, radio); its notification uses `ic_media_play`.
 
 ## Install
 
@@ -136,6 +142,43 @@ call); it prints as a warning on every `mix mob.deploy --native` of the host:
   Picture in Picture*. Apple rejects this mode for apps with no audio feature —
   only use this plugin in apps that legitimately use audio.
 
+## Choosing the type: `:media_playback`
+
+Android 14+ requires the type passed to `startForeground` to be one the
+`<service>` declares, plus its `FOREGROUND_SERVICE_<TYPE>` permission. The
+plugin doesn't declare `mediaPlayback` itself (Google Play asks every app to
+justify each foreground-service type it declares), so a host that uses
+`:media_playback` declares the service itself; the build then leaves that
+declaration alone. In `android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+<!-- inside <application> -->
+<service android:name="io.mob.background.BeamForegroundService"
+    android:exported="false"
+    android:foregroundServiceType="mediaPlayback" />
+```
+
+(`"dataSync|mediaPlayback"` allows both; `keep_alive/0` needs `dataSync`.)
+Without the type, `start(..., mode: :media_playback, ...)` returns
+`{:error, :unavailable}`; without the permission Android refuses
+`startForeground` and the owner gets
+`{:mob_background, {:error, :foreground_refused}}`.
+
+A host whose `<service>` doesn't declare `microphone` can drop the plugin's
+`FOREGROUND_SERVICE_MICROPHONE` permission too: the build skips a plugin
+permission the host manifest already names, and the manifest merger removes
+an entry marked `tools:node="remove"` (declare
+`xmlns:tools="http://schemas.android.com/tools"` on `<manifest>`):
+
+```xml
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
+    tools:node="remove" />
+```
+
+The same works for `FOREGROUND_SERVICE_DATA_SYNC` in a host that never uses
+`:data_sync` or `keep_alive/0`.
+
 ## Notes
 
 - **Coexistence with Mob.Audio:** playback mixes transparently (both use
@@ -153,10 +196,10 @@ call); it prints as a warning on every `mix mob.deploy --native` of the host:
   On Android 13+, `POST_NOTIFICATIONS` controls whether the notification appears
   in the status bar/shade (the service runs either way).
 - **Android 15 time limit:** with `targetSdk` 35+, Android caps `dataSync`
-  services at 6 hours per 24 hours in the background (`:microphone` has no cap).
-  When `onTimeout` fires, the service logs a warning (`MobBackground` tag),
-  sends `{:mob_background, {:error, :timeout}}` to the owner (if any), and
-  stops itself.
+  services at 6 hours per 24 hours in the background (`:microphone` and
+  `:media_playback` have no cap). When `onTimeout` fires, the service logs a
+  warning (`MobBackground` tag), sends `{:mob_background, {:error, :timeout}}`
+  to the owner (if any), and stops itself.
 
 ## License
 

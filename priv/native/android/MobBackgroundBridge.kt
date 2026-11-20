@@ -1,9 +1,10 @@
 // mob_background plugin — Android bridge (typed foreground service + notifications).
 //
 // Starts / updates / stops BeamForegroundService so the BEAM node keeps running
-// when the screen locks or the app is backgrounded, in either dataSync (0) or
-// microphone (1) mode. The native thunks (nativeRegister, nativeAction,
-// nativeFailed) are exported from the sibling zig NIF mob_background_nif.zig.
+// when the screen locks or the app is backgrounded, in dataSync (0),
+// microphone (1), or mediaPlayback (2) mode. The native thunks (nativeRegister,
+// nativeAction, nativeFailed) are exported from the sibling zig NIF
+// mob_background_nif.zig.
 //
 // MobPluginBootstrap.registerAll() calls register() at startup and hands off
 // the Activity (MobActivityAware) — the bridge needs an Activity Context to
@@ -35,9 +36,11 @@ import androidx.core.app.NotificationCompat
 import java.lang.ref.WeakReference
 
 object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
-    // Mode codes passed across JNI from Elixir/Zig: 0 = :data_sync, 1 = :microphone.
+    // Mode codes passed across JNI from Elixir/Zig: 0 = :data_sync, 1 = :microphone,
+    // 2 = :media_playback.
     const val MODE_DATA_SYNC = 0
     const val MODE_MICROPHONE = 1
+    const val MODE_MEDIA_PLAYBACK = 2
 
     const val NOTIFICATION_ID = 9820
     const val CHANNEL_KEEP_ALIVE = "mob_beam_fg"
@@ -58,6 +61,15 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
     private const val STATUS_SERVICE_NOT_DATA_SYNC = 4
     private const val STATUS_FAILED = 5
     private const val STATUS_RUNNING_MICROPHONE = 6
+    private const val STATUS_RUNNING_MEDIA_PLAYBACK = 7
+
+    // Every foregroundServiceType BeamForegroundService can start with. A
+    // <service> declaring none of them gets STATUS_SERVICE_NOT_DATA_SYNC (the
+    // name predates the other types).
+    private const val STARTABLE_TYPES =
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
 
     internal data class NoticeState(
         val mode: Int = MODE_DATA_SYNC,
@@ -117,14 +129,14 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
             val info = serviceInfo(activity)
             when {
                 info == null -> STATUS_SERVICE_NOT_DECLARED
-                Build.VERSION.SDK_INT >= 29 &&
-                    info.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC == 0 ->
+                Build.VERSION.SDK_INT >= 29 && (info.foregroundServiceType and STARTABLE_TYPES) == 0 ->
                     STATUS_SERVICE_NOT_DATA_SYNC
                 else -> synchronized(lock) {
                     val active = live || (pendingStarts > 0 && !stopWanted)
                     when {
                         !active -> STATUS_IDLE
                         state.mode == MODE_MICROPHONE -> STATUS_RUNNING_MICROPHONE
+                        state.mode == MODE_MEDIA_PLAYBACK -> STATUS_RUNNING_MEDIA_PLAYBACK
                         else -> STATUS_RUNNING_DATA_SYNC
                     }
                 }
@@ -157,12 +169,15 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
         MODE_MICROPHONE ->
             Build.VERSION.SDK_INT < 30 ||
                 (info.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) != 0
+        MODE_MEDIA_PLAYBACK ->
+            Build.VERSION.SDK_INT < 29 ||
+                (info.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) != 0
         else -> false
     }
 
     /**
      * Start (or retarget) an owner-bound BeamForegroundService in `mode`
-     * (0 = data_sync, 1 = microphone; always START_NOT_STICKY).
+     * (0 = data_sync, 1 = microphone, 2 = media_playback; always START_NOT_STICKY).
      * Returns null on success, or "permission" | "refused" | "unavailable".
      */
     @JvmStatic
@@ -173,7 +188,7 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
         actionIds: Array<String>,
         actionLabels: Array<String>
     ): String? {
-        if (mode != MODE_DATA_SYNC && mode != MODE_MICROPHONE) return "refused"
+        if (mode != MODE_DATA_SYNC && mode != MODE_MICROPHONE && mode != MODE_MEDIA_PLAYBACK) return "refused"
         val activity = activityRef?.get() ?: return "unavailable"
         val info = serviceInfo(activity) ?: return "unavailable"
         if (!serviceSupportsMode(info, mode)) return "unavailable"
@@ -429,10 +444,10 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
             snap.title
         }
 
-        val icon = if (snap.mode == MODE_MICROPHONE) {
-            android.R.drawable.ic_btn_speak_now
-        } else {
-            android.R.drawable.ic_dialog_info
+        val icon = when (snap.mode) {
+            MODE_MICROPHONE -> android.R.drawable.ic_btn_speak_now
+            MODE_MEDIA_PLAYBACK -> android.R.drawable.ic_media_play
+            else -> android.R.drawable.ic_dialog_info
         }
 
         val builder = NotificationCompat.Builder(context, channelId)

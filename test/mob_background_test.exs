@@ -156,7 +156,12 @@ defmodule MobBackgroundTest do
     end
 
     test "a status answer from the native side passes for :idle and {:running, mode}" do
-      for answer <- [:idle, {:running, :data_sync}, {:running, :microphone}] do
+      for answer <- [
+            :idle,
+            {:running, :data_sync},
+            {:running, :microphone},
+            {:running, :media_playback}
+          ] do
         assert SelfTest.classify(answer) == :pass
         assert Mob.Plugin.SelfTest.result?(SelfTest.classify(answer))
       end
@@ -167,7 +172,7 @@ defmodule MobBackgroundTest do
         bridge_not_registered: "MobBackgroundBridge not registered",
         no_activity: "has no Activity",
         service_not_declared: "declares no io.mob.background.BeamForegroundService",
-        service_not_data_sync: ~s(foregroundServiceType="dataSync"),
+        service_not_data_sync: "android:foregroundServiceType",
         no_audio_background_mode: "UIBackgroundModes"
       ]
 
@@ -179,7 +184,14 @@ defmodule MobBackgroundTest do
     end
 
     test "bare :running and unexpected answers fail instead of passing" do
-      for answer <- [:running, :ok, {:error, :status_failed}, {:error, {:unknown_status, 9}}, nil] do
+      for answer <- [
+            :running,
+            :ok,
+            {:running, :location},
+            {:error, :status_failed},
+            {:error, {:unknown_status, 9}},
+            nil
+          ] do
         assert {:fail, "background_status/0 returned " <> _} = result = SelfTest.classify(answer)
         assert Mob.Plugin.SelfTest.result?(result)
       end
@@ -242,6 +254,16 @@ defmodule MobBackgroundTest do
                MobBackground.nif_args(owner,
                  mode: :microphone,
                  notification: %{title: "Mic", text: "Listening"}
+               )
+
+      assert {^owner, 2, "FMutate", "Playing", [{:quit, "Quit"}]} =
+               MobBackground.nif_args(owner,
+                 mode: :media_playback,
+                 notification: %{
+                   title: "FMutate",
+                   text: "Playing",
+                   actions: [%{id: :quit, label: "Quit"}]
+                 }
                )
     end
 

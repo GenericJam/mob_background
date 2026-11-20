@@ -10,8 +10,8 @@ import android.os.IBinder
 import android.util.Log
 
 /**
- * Typed foreground service (`dataSync` or `microphone`) keeping the BEAM node
- * alive when the screen is locked or another app is in front.
+ * Typed foreground service (`dataSync`, `microphone`, or `mediaPlayback`)
+ * keeping the BEAM node alive when the screen is locked or another app is in front.
  *
  * Driven from `mob_background_nif` via [MobBackgroundBridge]. Action button
  * presses arrive in [onStartCommand] and forward to the owner process through
@@ -25,7 +25,8 @@ import android.util.Log
  * Ships in the plugin's `android.bridge_kt` list, so the native build copies it
  * into the host's `io/mob/background/` next to `MobBackgroundBridge.kt`, and
  * `android.manifest_application_snippets` declares its `<service>` with
- * `foregroundServiceType="dataSync|microphone"`.
+ * `foregroundServiceType="dataSync|microphone"`. `mediaPlayback` needs the
+ * host's own `<service>` declaration, which the build leaves alone.
  */
 class BeamForegroundService : Service() {
 
@@ -72,23 +73,16 @@ class BeamForegroundService : Service() {
 
         try {
             val notification = MobBackgroundBridge.buildForStart(this, mode)
-            if (Build.VERSION.SDK_INT >= 30) {
-                val fgsType = if (mode == MobBackgroundBridge.MODE_MICROPHONE) {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                } else {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                }
+            val fgsType = when (mode) {
+                MobBackgroundBridge.MODE_MICROPHONE -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                MobBackgroundBridge.MODE_MEDIA_PLAYBACK -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
+            // The typed overload is API 29+; the microphone type only exists from API 30.
+            if (Build.VERSION.SDK_INT >= 30 ||
+                (Build.VERSION.SDK_INT >= 29 && mode != MobBackgroundBridge.MODE_MICROPHONE)
+            ) {
                 startForeground(MobBackgroundBridge.NOTIFICATION_ID, notification, fgsType)
-            } else if (Build.VERSION.SDK_INT >= 29) {
-                if (mode == MobBackgroundBridge.MODE_MICROPHONE) {
-                    startForeground(MobBackgroundBridge.NOTIFICATION_ID, notification)
-                } else {
-                    startForeground(
-                        MobBackgroundBridge.NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                    )
-                }
             } else {
                 startForeground(MobBackgroundBridge.NOTIFICATION_ID, notification)
             }
@@ -117,8 +111,9 @@ class BeamForegroundService : Service() {
     }
 
     // Android 15+ (targetSdk 35) caps dataSync foreground services at 6h per
-    // 24h in the background; microphone has no such limit. Regardless of type,
-    // Android requires stopping within a few seconds once onTimeout fires.
+    // 24h in the background; microphone and mediaPlayback have no such limit.
+    // Regardless of type, Android requires stopping within a few seconds once
+    // onTimeout fires.
     override fun onTimeout(startId: Int, fgsType: Int) {
         if (Build.VERSION.SDK_INT >= 29 && fgsType == ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) {
             Log.w(TAG, "dataSync foreground service time limit reached (startId=$startId, fgsType=$fgsType); stopping")

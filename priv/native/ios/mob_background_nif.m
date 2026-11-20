@@ -4,13 +4,14 @@
  * when the screen locks. The session uses MixWithOthers so it does not
  * interrupt or duck the user's music or the app's own Mob.Audio playback.
  *
- * Supports both legacy keep_alive/0 (owner-less) and start/2 in :data_sync
- * mode (owner-monitored: owner exit stops the session). Mode :microphone
- * returns {error, unsupported} because iOS has no foreground-service
- * equivalent; background recording is held directly by the app's active
- * recording AVAudioSession + UIBackgroundModes [audio]. Notifications are
- * validated and accepted on :data_sync without showing persistent UI (actions
- * never fire on iOS).
+ * Supports both legacy keep_alive/0 (owner-less) and start/2 in :data_sync or
+ * :media_playback mode (owner-monitored: owner exit stops the session); the
+ * two modes run the same silent session and differ only in what status/0
+ * reports. Mode :microphone returns {error, unsupported} because iOS has no
+ * foreground-service equivalent; background recording is held directly by the
+ * app's active recording AVAudioSession + UIBackgroundModes [audio].
+ * Notifications are validated and accepted without showing persistent UI
+ * (actions never fire on iOS).
  *
  * Coexistence with Mob.Audio recording/playback:
  *   - Playback: MixWithOthers on both sides — they mix, silence is inaudible.
@@ -33,6 +34,7 @@
 
 #define MODE_DATA_SYNC 0
 #define MODE_MICROPHONE 1
+#define MODE_MEDIA_PLAYBACK 2
 #define MAX_TEXT_BYTES 1024
 #define MAX_ACTIONS 3
 
@@ -47,6 +49,7 @@ static ErlNifResourceType *g_watch_type = NULL;
 static pthread_mutex_t g_bg_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct {
   BOOL active;
+  int mode; // MODE_DATA_SYNC or MODE_MEDIA_PLAYBACK while active
   BOOL has_owner;
   ErlNifPid owner;
   uint64_t generation;
@@ -294,7 +297,8 @@ static ERL_NIF_TERM nif_background_start(ErlNifEnv *env, int argc,
 
   int mode = -1;
   if (!enif_get_int(env, argv[1], &mode) ||
-      (mode != MODE_DATA_SYNC && mode != MODE_MICROPHONE)) {
+      (mode != MODE_DATA_SYNC && mode != MODE_MICROPHONE &&
+       mode != MODE_MEDIA_PLAYBACK)) {
     return enif_make_badarg(env);
   }
 
@@ -318,6 +322,7 @@ static ERL_NIF_TERM nif_background_start(ErlNifEnv *env, int argc,
   }
   g_bg.owner = owner;
   g_bg.active = YES;
+  g_bg.mode = mode;
   pthread_mutex_unlock(&g_bg_lock);
 
   if (!was_active) {
@@ -350,6 +355,7 @@ static ERL_NIF_TERM nif_background_keep_alive(ErlNifEnv *env, int argc,
     bg_forget_locked();
     g_bg.active = YES;
     g_bg.has_owner = NO;
+    g_bg.mode = MODE_DATA_SYNC;
   }
   pthread_mutex_unlock(&g_bg_lock);
 
@@ -381,7 +387,7 @@ static ERL_NIF_TERM nif_background_stop(ErlNifEnv *env, int argc,
 
 // Read-only status: {error, no_audio_background_mode} when Info.plist lacks
 // UIBackgroundModes [audio] (the silent session can't hold the app alive),
-// else {running, data_sync} / idle from the session intent.
+// else {running, data_sync | media_playback} / idle from the session intent.
 static ERL_NIF_TERM nif_background_status(ErlNifEnv *env, int argc,
                                           const ERL_NIF_TERM argv[]) {
   (void)argc;
@@ -396,9 +402,16 @@ static ERL_NIF_TERM nif_background_status(ErlNifEnv *env, int argc,
   if (!has_audio_mode)
     return error_tuple(env, "no_audio_background_mode");
 
-  if (read_bg_active()) {
+  pthread_mutex_lock(&g_bg_lock);
+  BOOL active = g_bg.active;
+  int mode = g_bg.mode;
+  pthread_mutex_unlock(&g_bg_lock);
+
+  if (active) {
     return enif_make_tuple2(env, enif_make_atom(env, "running"),
-                            enif_make_atom(env, "data_sync"));
+                            enif_make_atom(env, mode == MODE_MEDIA_PLAYBACK
+                                                    ? "media_playback"
+                                                    : "data_sync"));
   }
   return enif_make_atom(env, "idle");
 }
