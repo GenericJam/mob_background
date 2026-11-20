@@ -145,7 +145,8 @@ call); it prints as a warning on every `mix mob.deploy --native` of the host:
 ## Choosing the type: `:media_playback`
 
 The type passed to `startForeground` must be one the `<service>` declares (API
-29+), and Android 14+ also requires its `FOREGROUND_SERVICE_<TYPE>` permission. The
+29+), and with `targetSdk` 34+ Android 14+ also requires its
+`FOREGROUND_SERVICE_<TYPE>` permission. The
 plugin doesn't declare `mediaPlayback` itself (Google Play asks every app to
 justify each foreground-service type it declares), so a host that uses
 `:media_playback` declares the service itself; the build then leaves that

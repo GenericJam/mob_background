@@ -216,9 +216,10 @@ defmodule MobBackground do
 
   Android requires a foreground service to declare what it does: the type
   passed to `startForeground` must be one the `<service>`'s
-  `android:foregroundServiceType` declares (API 29+), and Android 14+ makes the
-  type mandatory, each with its own `FOREGROUND_SERVICE_<TYPE>` permission. The
-  manifest is fixed at build time, so the type is chosen in two places:
+  `android:foregroundServiceType` declares (API 29+), and with `targetSdk` 34+
+  Android 14+ makes the type mandatory, each with its own
+  `FOREGROUND_SERVICE_<TYPE>` permission. The manifest is fixed at build time,
+  so the type is chosen in two places:
 
     * `:data_sync` (and `keep_alive/0`) / `:microphone`: unless the host
       declares its own `<service>`, the build declares it as

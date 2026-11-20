@@ -117,7 +117,7 @@ object MobBackgroundBridge : io.mob.plugin.MobActivityAware {
         appContext = activity.applicationContext
     }
 
-    // Read-only: whether keep-alive can work in this host and whether a session
+    // Read-only: whether this host is wired for at least one mode and whether a session
     // is running (and in which mode). Starts nothing, changes nothing. Never
     // throws (the NIF reports throws as STATUS_FAILED).
     @JvmStatic

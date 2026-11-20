@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-11-19
-
 ### Added
 
 - **`:media_playback` mode** for `start/1,2` (mode code `2` over the NIF), for
