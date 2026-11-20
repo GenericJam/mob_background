@@ -4,12 +4,18 @@
 %% AVAudioEngine session so the OS keeps the app running when the screen
 %% locks). Android: priv/native/jni/mob_background_nif.zig (a zig NIF bridging
 %% to the io.mob.background.MobBackgroundBridge Kotlin object, which starts /
-%% stops BeamForegroundService). Both register this module via
+%% updates / stops BeamForegroundService). Both register this module via
 %% ERL_NIF_INIT and are statically linked into the host binary on device. On a
 %% host dev build neither is linked, so on_load tolerates the failure and the
 %% NIFs fall back to nif_error until the native merge links one.
 -module(mob_background_nif).
--export([background_keep_alive/0, background_stop/0, background_status/0]).
+-export([
+    background_keep_alive/0,
+    background_stop/0,
+    background_status/0,
+    background_start/5,
+    background_update/3
+]).
 -on_load(init/0).
 
 init() ->
@@ -25,4 +31,10 @@ background_stop() ->
     erlang:nif_error(nif_not_loaded).
 
 background_status() ->
+    erlang:nif_error(nif_not_loaded).
+
+background_start(_Owner, _Mode, _Title, _Text, _Actions) ->
+    erlang:nif_error(nif_not_loaded).
+
+background_update(_Title, _Text, _Actions) ->
     erlang:nif_error(nif_not_loaded).
