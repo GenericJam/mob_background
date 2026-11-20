@@ -761,6 +761,8 @@ fn statusTerm(env: ?*erts.ErlNifEnv, code: jni.JInt) erts.ERL_NIF_TERM {
         1 => erts.makeTuple(env, .{ erts.atom(env, "running"), erts.atom(env, "data_sync") }),
         2 => erts.errorTuple(env, erts.atom(env, "no_activity")),
         3 => erts.errorTuple(env, erts.atom(env, "service_not_declared")),
+        // Name kept from 0.3.0: the <service> declares none of dataSync,
+        // microphone, mediaPlayback.
         4 => erts.errorTuple(env, erts.atom(env, "service_not_data_sync")),
         5 => erts.errorTuple(env, erts.atom(env, "status_failed")),
         6 => erts.makeTuple(env, .{ erts.atom(env, "running"), erts.atom(env, "microphone") }),

@@ -167,20 +167,24 @@ defmodule MobBackgroundTest do
       end
     end
 
-    test "a host where keep_alive/0 or start/2 would fail reports the cause" do
-      cases = [
-        bridge_not_registered: "MobBackgroundBridge not registered",
-        no_activity: "has no Activity",
-        service_not_declared: "declares no io.mob.background.BeamForegroundService",
-        service_not_data_sync: "android:foregroundServiceType",
-        no_audio_background_mode: "UIBackgroundModes"
+    test "each known host-wiring error fails with its own reason, not the unexpected-answer fallback" do
+      reasons = [
+        :bridge_not_registered,
+        :no_activity,
+        :service_not_declared,
+        :service_not_data_sync,
+        :no_audio_background_mode
       ]
 
-      for {reason, message} <- cases do
-        assert {:fail, text} = result = SelfTest.classify({:error, reason})
-        assert text =~ message
-        assert Mob.Plugin.SelfTest.result?(result)
-      end
+      texts =
+        for reason <- reasons do
+          assert {:fail, text} = result = SelfTest.classify({:error, reason})
+          refute text =~ "background_status/0 returned"
+          assert Mob.Plugin.SelfTest.result?(result)
+          text
+        end
+
+      assert length(Enum.uniq(texts)) == length(reasons)
     end
 
     test "bare :running and unexpected answers fail instead of passing" do

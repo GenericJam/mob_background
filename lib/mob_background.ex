@@ -219,11 +219,11 @@ defmodule MobBackground do
   `startForeground`, which must be one the manifest declares. The manifest is
   fixed at build time, so the type is chosen in two places:
 
-    * `:data_sync` (and `keep_alive/0`) / `:microphone`: the build declares
-      the service as `dataSync|microphone` and adds
-      `FOREGROUND_SERVICE_DATA_SYNC` and `FOREGROUND_SERVICE_MICROPHONE`.
-      Android 15 limits `dataSync` to 6 hours per 24 in the background (see
-      below).
+    * `:data_sync` (and `keep_alive/0`) / `:microphone`: unless the host
+      declares its own `<service>`, the build declares it as
+      `dataSync|microphone` and adds `FOREGROUND_SERVICE_DATA_SYNC` and
+      `FOREGROUND_SERVICE_MICROPHONE`. Android 15 limits `dataSync` to 6 hours
+      per 24 in the background (see below).
     * `:media_playback`: for apps that play audio the user hears (players,
       instruments, radio). No time limit. The host declares the service
       itself, in `android/app/src/main/AndroidManifest.xml`; the build then
@@ -242,9 +242,14 @@ defmodule MobBackground do
       every foreground-service type it declares.
 
   `start/2` returns `{:error, :unavailable}` when the `<service>` doesn't
-  declare the requested mode's type. A missing `FOREGROUND_SERVICE_<TYPE>`
-  permission makes Android refuse `startForeground`, which reaches the owner
-  as `{:mob_background, {:error, :foreground_refused}}`.
+  declare the requested mode's type. With `targetSdk` 34+ on Android 14+, a
+  missing `FOREGROUND_SERVICE_<TYPE>` permission makes Android refuse
+  `startForeground`, handled like any other refusal: the owner gets
+  `{:mob_background, {:error, :foreground_refused}}`. `keep_alive/0` in a host
+  whose `<service>` doesn't declare `dataSync` starts nothing: it logs a
+  warning (tag `MobBackground`) and returns `:ok`, and `status/0` stays
+  `:idle` (it reports a `<service>` with none of the plugin's types, not one
+  without `dataSync`).
 
   A host whose own `<service>` doesn't declare `microphone` can also drop the
   plugin's `FOREGROUND_SERVICE_MICROPHONE` permission (so Google Play doesn't

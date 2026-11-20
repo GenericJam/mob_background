@@ -159,10 +159,11 @@ declaration alone. In `android/app/src/main/AndroidManifest.xml`:
     android:foregroundServiceType="mediaPlayback" />
 ```
 
-(`"dataSync|mediaPlayback"` allows both; `keep_alive/0` needs `dataSync`.)
-Without the type, `start(..., mode: :media_playback, ...)` returns
-`{:error, :unavailable}`; without the permission Android refuses
-`startForeground` and the owner gets
+(`"dataSync|mediaPlayback"` allows both. `keep_alive/0` needs `dataSync`: in a
+host whose `<service>` lacks it, `keep_alive/0` logs a warning and starts
+nothing.) Without the type, `start(..., mode: :media_playback, ...)` returns
+`{:error, :unavailable}`; without the permission (`targetSdk` 34+ on Android
+14+) Android refuses `startForeground` and the owner gets
 `{:mob_background, {:error, :foreground_refused}}`.
 
 A host whose `<service>` doesn't declare `microphone` can drop the plugin's

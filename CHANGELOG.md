@@ -40,7 +40,10 @@
   That error, which keeps its name, now means the `<service>` declares none of
   `dataSync`, `microphone`, `mediaPlayback`.
 
-No behaviour change for `:data_sync`, `:microphone`, or `keep_alive/0`.
+`:data_sync`, `:microphone`, and `keep_alive/0` start, run, and return as in
+0.3.0; only the `status/0` fix above touches them. In a host whose
+`<service>` lacks `dataSync`, `keep_alive/0` still logs a warning and starts
+nothing, and `status/0` no longer flags it.
 
 ## [0.3.0] - 2026-11-19
 
