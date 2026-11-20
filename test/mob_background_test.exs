@@ -156,30 +156,46 @@ defmodule MobBackgroundTest do
     end
 
     test "a status answer from the native side passes for :idle and {:running, mode}" do
-      for answer <- [:idle, {:running, :data_sync}, {:running, :microphone}] do
+      for answer <- [
+            :idle,
+            {:running, :data_sync},
+            {:running, :microphone},
+            {:running, :media_playback}
+          ] do
         assert SelfTest.classify(answer) == :pass
         assert Mob.Plugin.SelfTest.result?(SelfTest.classify(answer))
       end
     end
 
-    test "a host where keep_alive/0 or start/2 would fail reports the cause" do
-      cases = [
-        bridge_not_registered: "MobBackgroundBridge not registered",
-        no_activity: "has no Activity",
-        service_not_declared: "declares no io.mob.background.BeamForegroundService",
-        service_not_data_sync: ~s(foregroundServiceType="dataSync"),
-        no_audio_background_mode: "UIBackgroundModes"
+    test "each known host-wiring error fails with its own reason, not the unexpected-answer fallback" do
+      reasons = [
+        :bridge_not_registered,
+        :no_activity,
+        :service_not_declared,
+        :service_not_data_sync,
+        :no_audio_background_mode
       ]
 
-      for {reason, message} <- cases do
-        assert {:fail, text} = result = SelfTest.classify({:error, reason})
-        assert text =~ message
-        assert Mob.Plugin.SelfTest.result?(result)
-      end
+      texts =
+        for reason <- reasons do
+          assert {:fail, text} = result = SelfTest.classify({:error, reason})
+          refute text =~ "background_status/0 returned"
+          assert Mob.Plugin.SelfTest.result?(result)
+          text
+        end
+
+      assert length(Enum.uniq(texts)) == length(reasons)
     end
 
     test "bare :running and unexpected answers fail instead of passing" do
-      for answer <- [:running, :ok, {:error, :status_failed}, {:error, {:unknown_status, 9}}, nil] do
+      for answer <- [
+            :running,
+            :ok,
+            {:running, :location},
+            {:error, :status_failed},
+            {:error, {:unknown_status, 9}},
+            nil
+          ] do
         assert {:fail, "background_status/0 returned " <> _} = result = SelfTest.classify(answer)
         assert Mob.Plugin.SelfTest.result?(result)
       end
@@ -242,6 +258,16 @@ defmodule MobBackgroundTest do
                MobBackground.nif_args(owner,
                  mode: :microphone,
                  notification: %{title: "Mic", text: "Listening"}
+               )
+
+      assert {^owner, 2, "FMutate", "Playing", [{:quit, "Quit"}]} =
+               MobBackground.nif_args(owner,
+                 mode: :media_playback,
+                 notification: %{
+                   title: "FMutate",
+                   text: "Playing",
+                   actions: [%{id: :quit, label: "Quit"}]
+                 }
                )
     end
 

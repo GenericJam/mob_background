@@ -1,8 +1,9 @@
 //! mob_background_nif — Android typed foreground-service ZIG plugin NIF.
 //!
 //! Bridges to the plugin-owned Kotlin object `io.mob.background.MobBackgroundBridge`,
-//! which drives `BeamForegroundService` in either `dataSync` (mode = 0) or
-//! `microphone` (mode = 1) with dynamic notifications and action buttons.
+//! which drives `BeamForegroundService` in `dataSync` (mode = 0), `microphone`
+//! (mode = 1), or `mediaPlayback` (mode = 2) with dynamic notifications and
+//! action buttons.
 //!
 //! Build path: compiled via `addZigObject` from `-Dplugin_zig_nifs`, reaching
 //! mob-core ERTS / JNI bindings through `@import("erts")` / `@import("jni")`.
@@ -68,6 +69,7 @@ extern fn enif_is_empty_list(env: ?*erts.ErlNifEnv, term: erts.ERL_NIF_TERM) c_i
 // ── Limits & mode mapping (must match MobBackground / MobBackgroundBridge) ─
 const MODE_DATA_SYNC: c_int = 0;
 const MODE_MICROPHONE: c_int = 1;
+const MODE_MEDIA_PLAYBACK: c_int = 2;
 
 const MAX_TEXT_BYTES: usize = 1024;
 const MAX_ACTIONS: usize = 3;
@@ -598,7 +600,7 @@ fn nif_background_start(
 
     var mode: c_int = 0;
     if (erts.enif_get_int(env, argv[1], &mode) == 0 or
-        (mode != MODE_DATA_SYNC and mode != MODE_MICROPHONE))
+        (mode != MODE_DATA_SYNC and mode != MODE_MICROPHONE and mode != MODE_MEDIA_PLAYBACK))
     {
         return erts.badarg(env);
     }
@@ -759,9 +761,12 @@ fn statusTerm(env: ?*erts.ErlNifEnv, code: jni.JInt) erts.ERL_NIF_TERM {
         1 => erts.makeTuple(env, .{ erts.atom(env, "running"), erts.atom(env, "data_sync") }),
         2 => erts.errorTuple(env, erts.atom(env, "no_activity")),
         3 => erts.errorTuple(env, erts.atom(env, "service_not_declared")),
+        // Name kept from 0.3.0: the <service> declares none of dataSync,
+        // microphone, mediaPlayback.
         4 => erts.errorTuple(env, erts.atom(env, "service_not_data_sync")),
         5 => erts.errorTuple(env, erts.atom(env, "status_failed")),
         6 => erts.makeTuple(env, .{ erts.atom(env, "running"), erts.atom(env, "microphone") }),
+        7 => erts.makeTuple(env, .{ erts.atom(env, "running"), erts.atom(env, "media_playback") }),
         else => erts.errorTuple(
             env,
             erts.makeTuple(env, .{ erts.atom(env, "unknown_status"), erts.enif_make_int64(env, code) }),

@@ -4,9 +4,9 @@ defmodule MobBackground do
 
   Keeps the BEAM node running when the screen locks or the app is backgrounded.
   On iOS this is a silent `AVAudioEngine` session; on Android it is a typed
-  foreground service (`dataSync` or `microphone`) with an optional dynamic
-  notification and action buttons. Opt-in: add the dependency and activate it
-  in `mob.exs`.
+  foreground service (`dataSync`, `microphone`, or `mediaPlayback`) with an
+  optional dynamic notification and action buttons. Opt-in: add the dependency
+  and activate it in `mob.exs`.
 
   ## Which plugin do I actually want?
 
@@ -58,8 +58,8 @@ defmodule MobBackground do
   ### Owner-bound typed session (`start/1,2` + `update/1`)
 
   Use `start/1,2` when your GenServer or LiveView needs a specific foreground
-  service type (`:data_sync` or `:microphone`), custom notification text, or
-  interactive notification buttons:
+  service type (`:data_sync`, `:microphone`, or `:media_playback`), custom
+  notification text, or interactive notification buttons:
 
       :ok =
         MobBackground.start(self(),
@@ -126,8 +126,9 @@ defmodule MobBackground do
   is already running, `keep_alive/0` is a no-op and does not override the
   running session.
 
-  `status/0` is a read-only check that keep-alive can work in this host and
-  whether a session is active (`:idle` or `{:running, mode}`);
+  `status/0` is a read-only check that this host is wired for at least one
+  mode (the service is declared with a type the plugin can start) and whether
+  a session is active (`:idle` or `{:running, mode}`);
   `MobBackground.SelfTest` uses it for `mix mob.selftest`.
 
   ## Modes
@@ -136,15 +137,17 @@ defmodule MobBackground do
   |------|------------------|---------------|-------------------|-------------------------|
   | `:data_sync` | `dataSync` | Silent `AVAudioEngine` keep-alive | `ic_dialog_info` | 6h / 24h in background |
   | `:microphone` | `microphone` | `{:error, :unsupported}` | `ic_btn_speak_now` | None |
+  | `:media_playback` | `mediaPlayback` (host-declared, see *Choosing the type*) | Silent `AVAudioEngine` keep-alive (same as `:data_sync`) | `ic_media_play` | None |
 
   ## iOS — silent audio session
 
   iOS suspends apps when the screen locks unless they hold an active background
-  execution mode. Both `keep_alive/0` and `start/2` with `mode: :data_sync`
-  start a silent `AVAudioEngine` looping a zero-filled buffer with
-  `AVAudioSessionCategoryOptionMixWithOthers` — the OS sees an active audio
-  session and keeps the process running, the user hears nothing, and any music
-  already playing is undisturbed.
+  execution mode. `keep_alive/0` and `start/2` with `mode: :data_sync` or
+  `mode: :media_playback` start a silent `AVAudioEngine` looping a zero-filled
+  buffer with `AVAudioSessionCategoryOptionMixWithOthers` — the OS sees an
+  active audio session and keeps the process running, the user hears nothing,
+  and any music already playing is undisturbed. The two modes behave the same
+  on iOS; `status/0` reports the mode the session was started with.
 
   iOS has no persistent foreground-service notification surface: `notification`
   is validated and accepted, `update/1` returns `:ok` while running (and
@@ -204,10 +207,64 @@ defmodule MobBackground do
   ## Android — foreground service
 
   On Android the OS equivalent of iOS background execution is a *foreground
-  service*. `BeamForegroundService` starts in the foreground with either
-  `dataSync` or `microphone` and a persistent notification. The OS
+  service*. `BeamForegroundService` starts in the foreground with `dataSync`,
+  `microphone`, or `mediaPlayback` and a persistent notification. The OS
   will not kill a foreground service under memory pressure and will not pause
   the process when the screen locks.
+
+  ### Choosing the type
+
+  Android requires a foreground service to declare what it does: the type
+  passed to `startForeground` must be one the `<service>`'s
+  `android:foregroundServiceType` declares (API 29+), and with `targetSdk` 34+
+  Android 14+ makes the type mandatory, each with its own
+  `FOREGROUND_SERVICE_<TYPE>` permission. The manifest is fixed at build time,
+  so the type is chosen in two places:
+
+    * `:data_sync` (and `keep_alive/0`) / `:microphone`: unless the host
+      declares its own `<service>`, the build declares it as
+      `dataSync|microphone` and adds `FOREGROUND_SERVICE_DATA_SYNC` and
+      `FOREGROUND_SERVICE_MICROPHONE`. Android 15 limits `dataSync` to 6 hours
+      per 24 in the background (see below).
+    * `:media_playback`: for apps that play audio the user hears (players,
+      instruments, radio). No time limit. The host declares the service
+      itself, in `android/app/src/main/AndroidManifest.xml`; the build then
+      leaves that declaration alone:
+
+          <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+          ...
+          <application ...>
+              <service android:name="io.mob.background.BeamForegroundService"
+                  android:exported="false"
+                  android:foregroundServiceType="mediaPlayback" />
+
+      (`"dataSync|mediaPlayback"` declares both, for an app that uses
+      either; `keep_alive/0` needs `dataSync`.) The plugin doesn't declare
+      `mediaPlayback` for every host: Google Play asks each app to justify
+      every foreground-service type it declares.
+
+  `start/2` returns `{:error, :unavailable}` when the `<service>` doesn't
+  declare the requested mode's type. With `targetSdk` 34+ on Android 14+, a
+  missing `FOREGROUND_SERVICE_<TYPE>` permission makes Android refuse
+  `startForeground`, handled like any other refusal: the owner gets
+  `{:mob_background, {:error, :foreground_refused}}`. `keep_alive/0` in a host
+  whose `<service>` doesn't declare `dataSync` starts nothing: it logs a
+  warning (tag `MobBackground`) and returns `:ok`, and `status/0` stays
+  `:idle` (it reports a `<service>` with none of the plugin's types, not one
+  without `dataSync`).
+
+  A host whose own `<service>` doesn't declare `microphone` can also drop the
+  plugin's `FOREGROUND_SERVICE_MICROPHONE` permission (so Google Play doesn't
+  ask about it): the build skips any plugin permission the host manifest
+  already names, and the manifest merger removes an entry marked
+  `tools:node="remove"` (with `xmlns:tools="http://schemas.android.com/tools"`
+  on `<manifest>`):
+
+      <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
+          tools:node="remove" />
+
+  The same works for `FOREGROUND_SERVICE_DATA_SYNC` in a host that never uses
+  `:data_sync` or `keep_alive/0`.
 
   ### Android 14+ while-in-use rules & permissions
 
@@ -225,8 +282,9 @@ defmodule MobBackground do
     (`mix mob.new` hosts already declare it) and grant it at runtime before
     calling `start(..., mode: :microphone, ...)`, or `start/2` returns
     `{:error, :permission}`.
-  * **Google Play Console declaration:** Because the plugin's merged `<service>`
-    declares `android:foregroundServiceType="dataSync|microphone"`, apps
+  * **Google Play Console declaration:** The plugin's merged `<service>`
+    declares `android:foregroundServiceType="dataSync|microphone"` (or the
+    types of the host's own `<service>`, see *Choosing the type*); apps
     published to Google Play must complete the foreground service declaration
     for the types they ship in Play Console.
 
@@ -280,12 +338,13 @@ defmodule MobBackground do
   ### Android 15 time limit
 
   With `targetSdk` 35+, Android allows a `dataSync` foreground service at most
-  6 hours per 24 hours while the app is in the background (`:microphone` has no
-  such cap). When the limit is reached the system calls `onTimeout`, which
-  logs a warning (tag `MobBackground`), notifies the owner with
-  `{:mob_background, {:error, :timeout}}`, clears running state, and stops
-  the service so the app does not crash. Call `start/2` or `keep_alive/0`
-  again once the app is back in the foreground.
+  6 hours per 24 hours while the app is in the background (`:microphone` and
+  `:media_playback` have no such cap). When the limit is reached the system
+  calls `onTimeout`, which logs a warning (tag `MobBackground`), notifies the
+  owner with `{:mob_background, {:error, :timeout}}`, clears running state, and
+  stops the service so the app does not crash. Call `start/2` or
+  `keep_alive/0` again once the app is back in the foreground, or use
+  `:media_playback` if the app plays audio.
 
   ## Validation limits
 
@@ -294,7 +353,7 @@ defmodule MobBackground do
 
   * `opts` must be a keyword list containing only `:mode` (required) and
     `:notification` (required).
-  * `mode` must be `:data_sync` or `:microphone`.
+  * `mode` must be `:data_sync`, `:microphone`, or `:media_playback`.
   * `notification` must be a plain map with required `:title` and `:text`
     keys (valid UTF-8 binaries, at most `1024` bytes each) and optional
     `:actions` (defaults to `[]`).
@@ -312,7 +371,7 @@ defmodule MobBackground do
   @valid_notification_keys [:title, :text, :actions]
   @valid_action_keys [:id, :label]
 
-  @type mode :: :data_sync | :microphone
+  @type mode :: :data_sync | :microphone | :media_playback
   @type action :: %{id: atom(), label: String.t()}
   @type notification :: %{
           required(:title) => String.t(),
@@ -336,7 +395,9 @@ defmodule MobBackground do
 
   Options (`opts`):
 
-    * `:mode` (required) — `:data_sync` or `:microphone`.
+    * `:mode` (required) — `:data_sync`, `:microphone`, or `:media_playback`
+      (Android: the host's `<service>` must declare `mediaPlayback`, see
+      *Choosing the type*).
     * `:notification` (required) — `%{title: String.t(), text: String.t(), actions: [%{id: atom(), label: String.t()}]}`
       (`:actions` is optional, max 3 actions).
 
@@ -347,7 +408,7 @@ defmodule MobBackground do
       (for example app in background) or a JNI error occurred.
     * `{:error, :unavailable}` — Android bridge not registered, no Activity, or
       `BeamForegroundService` missing from manifest / missing the requested
-      `foregroundServiceType`.
+      `foregroundServiceType` (`mediaPlayback` for `:media_playback`).
     * `{:error, :owner_dead}` — `owner` was already dead when installing the
       monitor (the just-started service is stopped).
     * `{:error, :unsupported}` — platform does not support the requested mode
@@ -400,13 +461,16 @@ defmodule MobBackground do
   end
 
   @doc """
-  Reports, without changing anything, whether background keep-alive can work in
-  this host and whether a session is currently running.
+  Reports, without changing anything, whether this host is wired for at least
+  one mode and whether a session is currently running.
 
-    * `:idle` — ready; no session is running.
+    * `:idle` — no session is running, and the host is wired for at least one
+      mode (on Android, a `<service>` with `dataSync`, `microphone`, or
+      `mediaPlayback`; `keep_alive/0` additionally needs `dataSync`).
     * `{:running, :data_sync}` — active in `:data_sync` mode (either from
       `keep_alive/0` or `start/2`).
     * `{:running, :microphone}` — active in `:microphone` mode (Android).
+    * `{:running, :media_playback}` — active in `:media_playback` mode.
     * `{:error, :no_audio_background_mode}` — iOS: `Info.plist` lacks
       `UIBackgroundModes` `audio`.
     * `{:error, :bridge_not_registered}` — Android: `MobBackgroundBridge`
@@ -416,7 +480,10 @@ defmodule MobBackground do
       Activity, so `keep_alive/0` and `start/2` cannot start the service.
     * `{:error, :service_not_declared}` / `{:error, :service_not_data_sync}`
       — Android: the app manifest has no `BeamForegroundService` `<service>`,
-      or declares it without `foregroundServiceType="dataSync"`.
+      or declares it with none of the types the plugin can start (`dataSync`,
+      `microphone`, `mediaPlayback`). The atom keeps its 0.3.0 name; a
+      `<service>` declaring only `mediaPlayback` (or only `microphone`) is
+      not reported.
     * `{:error, :no_jni_env}`, `{:error, :status_failed}`,
       `{:error, {:unknown_status, code}}` — Android: the query itself failed.
   """
@@ -427,7 +494,7 @@ defmodule MobBackground do
 
   @doc false
   @spec nif_args(pid(), keyword()) ::
-          {pid(), 0 | 1, String.t(), String.t(), [{atom(), String.t()}]}
+          {pid(), 0 | 1 | 2, String.t(), String.t(), [{atom(), String.t()}]}
   def nif_args(owner, opts) do
     unless is_pid(owner) do
       raise ArgumentError, "expected owner to be a pid, got: #{inspect(owner)}"
@@ -497,9 +564,11 @@ defmodule MobBackground do
 
   defp encode_mode!({:ok, :data_sync}), do: 0
   defp encode_mode!({:ok, :microphone}), do: 1
+  defp encode_mode!({:ok, :media_playback}), do: 2
 
   defp encode_mode!({:ok, other}) do
-    raise ArgumentError, "unknown mode #{inspect(other)}, expected :data_sync or :microphone"
+    raise ArgumentError,
+          "unknown mode #{inspect(other)}, expected :data_sync, :microphone, or :media_playback"
   end
 
   defp encode_mode!(:error) do

@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`:media_playback` mode** for `start/1,2` (mode code `2` over the NIF), for
+  apps that play audio the user hears. Same owner-bound session semantics as
+  `:data_sync` (owner monitor, `START_NOT_STICKY`, action buttons,
+  `{:mob_background, {:error, :foreground_refused}}`), and `status/0` reports
+  `{:running, :media_playback}`.
+  - **Android:** a `mediaPlayback` foreground service
+    (`FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK`, API 29+), with no Android 15
+    background time limit, and an `ic_media_play` notification icon. The
+    plugin doesn't declare the type or `FOREGROUND_SERVICE_MEDIA_PLAYBACK`
+    (Google Play asks every app to justify each type it declares): a host
+    using `:media_playback` declares its own
+    `<service android:name="io.mob.background.BeamForegroundService"
+    android:foregroundServiceType="mediaPlayback">` (or
+    `"dataSync|mediaPlayback"`) and the permission, and the build leaves that
+    declaration alone. Without the type `start/2` returns
+    `{:error, :unavailable}`.
+  - **iOS:** the same silent `AVAudioEngine` keep-alive as `:data_sync`
+    (`update/1` returns `:ok`, no UI); the NIF tracks the mode so `status/0`
+    reports `{:running, :media_playback}`.
+  - `MobBackground.SelfTest.classify/1` passes `{:running, :media_playback}`.
+- Docs: *Choosing the type*, and how a host whose own `<service>` doesn't use
+  `microphone` drops the plugin's `FOREGROUND_SERVICE_MICROPHONE` with
+  `tools:node="remove"` (the build skips a plugin permission the host
+  manifest already names). This answers 0.3.0's *Upgrading* note: an app with
+  no microphone feature no longer has to stay on 0.2.x.
+
+### Fixed
+
+- **Android `status/0` for hosts whose `<service>` declares only
+  `mediaPlayback` (or only `microphone`)** no longer reports
+  `{:error, :service_not_data_sync}` (and the self-test no longer fails).
+  That error, which keeps its name, now means the `<service>` declares none of
+  `dataSync`, `microphone`, `mediaPlayback`.
+
+`:data_sync`, `:microphone`, and `keep_alive/0` start, run, and return as in
+0.3.0; only the `status/0` fix above touches them. In a host whose
+`<service>` lacks `dataSync`, `keep_alive/0` still logs a warning and starts
+nothing, and `status/0` no longer flags it.
+
 ## [0.3.0] - 2026-11-19
 
 ### Added
